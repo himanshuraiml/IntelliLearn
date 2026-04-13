@@ -15,6 +15,7 @@ import Quiz from '@/components/Quiz';
 import TrainingChart from '@/components/TrainingChart';
 import ConfusionMatrix from '@/components/ConfusionMatrix';
 import FeatureImportance from '@/components/FeatureImportance';
+import AlgoExplainer from '@/components/AlgoExplainer';
 import {
   trainLinearRegression, trainPolynomialRegression,
   trainLogisticRegression, trainRidgeRegression,
@@ -160,6 +161,7 @@ export default function Home() {
   const [currentEpoch,   setCurrentEpoch]   = useState(null);
   const [liveMetrics,    setLiveMetrics]    = useState({ loss: null, acc: null });
   const [showAlgoMenu,   setShowAlgoMenu]   = useState(false);
+  const [showExplainer,  setShowExplainer]  = useState(false);
 
   // Feature 1 – Training history for loss/acc chart
   const [trainingHistory, setTrainingHistory] = useState({ loss: [], acc: [], valLoss: [], valAcc: [] });
@@ -720,6 +722,16 @@ export default function Home() {
             )}
           </div>
 
+          {/* "Explain" button — opens the deep-dive popup */}
+          <button
+            onClick={() => setShowExplainer(true)}
+            title="Read a detailed explanation of this algorithm"
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-slate-400 hover:border-brand-500/50 hover:text-brand-400 transition-all text-xs font-semibold shrink-0"
+          >
+            <BookOpen size={13} />
+            <span className="hidden sm:inline">Explain</span>
+          </button>
+
           {/* Compare picker (shown when comparison mode is active) */}
           {comparisonMode && comparableAlgos.length > 0 && (
             <div className="relative">
@@ -907,6 +919,11 @@ export default function Home() {
           </aside>
         </div>
       </section>
+
+      {/* Algorithm deep-dive explainer popup */}
+      {showExplainer && (
+        <AlgoExplainer algoId={activeTab} onClose={() => setShowExplainer(false)} />
+      )}
     </main>
   );
 }
