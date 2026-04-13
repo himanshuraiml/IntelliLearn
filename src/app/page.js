@@ -669,6 +669,15 @@ export default function Home() {
           <div className="pt-3 mt-1 border-t border-white/5 text-center">
             <p className="text-[10px] text-slate-600 leading-relaxed">
               Developed by <span className="text-slate-400 font-semibold">Dr. Himanshu Rai</span>
+              <br />
+              <a
+                href="https://www.linkedin.com/in/himanshurai14/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-500 hover:text-blue-400 transition-colors"
+              >
+                Follow on LinkedIn
+              </a>
             </p>
           </div>
         </div>
