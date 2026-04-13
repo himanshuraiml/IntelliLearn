@@ -4,21 +4,28 @@ import * as tf from '@tensorflow/tfjs';
 //  LINEAR REGRESSION
 // ─────────────────────────────────────────────
 export const trainLinearRegression = async (data, params, onEpoch) => {
-  const { learningRate = 0.1, epochs = 100 } = params;
+  const { learningRate = 0.1, epochs = 100, validationSplit = 0.2 } = params;
   const xs = tf.tensor2d(data.map(d => [d.x]));
   const ys = tf.tensor2d(data.map(d => [d.y]));
   const model = tf.sequential();
   model.add(tf.layers.dense({ units: 1, inputShape: [1] }));
   model.compile({ optimizer: tf.train.sgd(learningRate), loss: 'meanSquaredError' });
 
+  // Pre-compute for R² (doesn't change across epochs)
+  const yMean  = data.reduce((s, d) => s + d.y, 0) / data.length;
+  const ssTot  = data.reduce((s, d) => s + (d.y - yMean) ** 2, 0) || 1;
+
   await model.fit(xs, ys, {
     epochs,
+    validationSplit,
     callbacks: {
       onEpochEnd: async (epoch, logs) => {
         if (onEpoch) {
           const weight = model.getWeights()[0].dataSync()[0];
-          const bias = model.getWeights()[1].dataSync()[0];
-          onEpoch(epoch, { ...logs, weight, bias });
+          const bias   = model.getWeights()[1].dataSync()[0];
+          const ssRes  = data.reduce((s, d) => s + (d.y - (weight * d.x + bias)) ** 2, 0);
+          const r2     = Math.max(0, 1 - ssRes / ssTot);
+          await onEpoch(epoch, { ...logs, weight, bias, acc: r2 });
         }
         await tf.nextFrame();
       }
@@ -35,7 +42,7 @@ export const trainLinearRegression = async (data, params, onEpoch) => {
 //  POLYNOMIAL REGRESSION
 // ─────────────────────────────────────────────
 export const trainPolynomialRegression = async (data, params, onEpoch) => {
-  const { learningRate = 0.01, epochs = 200, degree = 2 } = params;
+  const { learningRate = 0.01, epochs = 200, degree = 2, validationSplit = 0.2 } = params;
 
   // Expand features: [x, x^2, ..., x^degree]
   const expandPoly = (x) => Array.from({ length: degree }, (_, i) => Math.pow(x, i + 1));
@@ -47,23 +54,36 @@ export const trainPolynomialRegression = async (data, params, onEpoch) => {
   model.add(tf.layers.dense({ units: 1 }));
   model.compile({ optimizer: tf.train.adam(learningRate), loss: 'meanSquaredError' });
 
-  const xMin = Math.min(...data.map(d => d.x));
-  const xMax = Math.max(...data.map(d => d.x));
+  const xMin  = Math.min(...data.map(d => d.x));
+  const xMax  = Math.max(...data.map(d => d.x));
+
+  // Pre-compute for R² (doesn't change across epochs)
+  const yMean = data.reduce((s, d) => s + d.y, 0) / data.length;
+  const ssTot = data.reduce((s, d) => s + (d.y - yMean) ** 2, 0) || 1;
 
   await model.fit(xs, ys, {
     epochs,
+    validationSplit,
     callbacks: {
       onEpochEnd: async (epoch, logs) => {
         if (onEpoch) {
           // Generate curve points for visualization
           const curvePoints = 50;
-          const step = (xMax - xMin) / curvePoints;
+          const step   = (xMax - xMin) / curvePoints;
           const testXs = Array.from({ length: curvePoints + 1 }, (_, i) => xMin + i * step);
           const expanded = tf.tensor2d(testXs.map(x => expandPoly(x)));
-          const preds = model.predict(expanded).dataSync();
+          const preds    = model.predict(expanded).dataSync();
           tf.dispose(expanded);
           const curve = testXs.map((x, i) => ({ x, y: preds[i] }));
-          onEpoch(epoch, { ...logs, curve, type: 'poly' });
+
+          // R² on training data
+          const trainExpanded = tf.tensor2d(data.map(d => expandPoly(d.x)));
+          const trainPreds    = model.predict(trainExpanded).dataSync();
+          tf.dispose(trainExpanded);
+          const ssRes = data.reduce((s, d, i) => s + (d.y - trainPreds[i]) ** 2, 0);
+          const r2    = Math.max(0, 1 - ssRes / ssTot);
+
+          await onEpoch(epoch, { ...logs, curve, type: 'poly', acc: r2 });
         }
         await tf.nextFrame();
       }
@@ -84,21 +104,22 @@ export const trainPolynomialRegression = async (data, params, onEpoch) => {
 //  LOGISTIC REGRESSION
 // ─────────────────────────────────────────────
 export const trainLogisticRegression = async (data, params, onEpoch) => {
-  const { learningRate = 0.1, epochs = 100 } = params;
+  const { learningRate = 0.1, epochs = 100, validationSplit = 0.2 } = params;
   const xs = tf.tensor2d(data.map(d => [d.x, d.y]));
   const ys = tf.tensor2d(data.map(d => [d.label]));
   const model = tf.sequential();
   model.add(tf.layers.dense({ units: 1, activation: 'sigmoid', inputShape: [2] }));
-  model.compile({ optimizer: tf.train.adam(learningRate), loss: 'binaryCrossentropy' });
+  model.compile({ optimizer: tf.train.adam(learningRate), loss: 'binaryCrossentropy', metrics: ['accuracy'] });
 
   await model.fit(xs, ys, {
     epochs,
+    validationSplit,
     callbacks: {
       onEpochEnd: async (epoch, logs) => {
         if (onEpoch) {
           const weights = model.getWeights()[0].dataSync();
           const bias = model.getWeights()[1].dataSync()[0];
-          onEpoch(epoch, { ...logs, weights: Array.from(weights), bias, type: 'logistic' });
+          await onEpoch(epoch, { ...logs, weights: Array.from(weights), bias, type: 'logistic' });
         }
         await tf.nextFrame();
       }
@@ -125,6 +146,10 @@ export const trainRidgeRegression = async (data, params, onEpoch) => {
   const predict = (x) => x.matMul(w).add(b);
   const optimizer = tf.train.sgd(learningRate);
 
+  // Pre-compute for R²
+  const yMean = data.reduce((s, d) => s + d.y, 0) / data.length;
+  const ssTot = data.reduce((s, d) => s + (d.y - yMean) ** 2, 0) || 1;
+
   for (let epoch = 0; epoch < epochs; epoch++) {
     const loss = optimizer.minimize(() => {
       const preds = predict(xs);
@@ -134,10 +159,12 @@ export const trainRidgeRegression = async (data, params, onEpoch) => {
     }, true);
 
     if (onEpoch) {
-      const weight = w.dataSync()[0];
-      const bias = b.dataSync()[0];
+      const weight  = w.dataSync()[0];
+      const bias    = b.dataSync()[0];
       const lossVal = loss.dataSync()[0];
-      onEpoch(epoch, { loss: lossVal, weight, bias });
+      const ssRes   = data.reduce((s, d) => s + (d.y - (weight * d.x + bias)) ** 2, 0);
+      const r2      = Math.max(0, 1 - ssRes / ssTot);
+      await onEpoch(epoch, { loss: lossVal, weight, bias, acc: r2 });
     }
     loss.dispose();
     await tf.nextFrame();
@@ -271,7 +298,8 @@ export const trainNaiveBayes = (data, onStep) => {
     }
   }
 
-  return { stats, predict, type: 'naiveBayes', cells, xMin, xMax, yMin, yMax };
+  const nbCorrect = data.filter(d => predict(d.x, d.y) === d.label).length;
+  return { stats, predict, type: 'naiveBayes', cells, xMin, xMax, yMin, yMax, accuracy: nbCorrect / data.length };
 };
 
 // ─────────────────────────────────────────────
@@ -316,15 +344,27 @@ function toLeaf(group) {
   return { leaf: true, label: parseInt(Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b)) };
 }
 
-function buildTree(data, depth = 0, maxDepth = 4, minSize = 2) {
+function buildTree(data, depth = 0, maxDepth = 4, minSize = 2, importances = null) {
   const classes = [...new Set(data.map(d => d.label))];
   if (classes.length === 1 || data.length <= minSize || depth >= maxDepth) return toLeaf(data);
-  const { feature, threshold, groups } = bestSplit(data);
+  const { feature, threshold, groups, gini: splitGini } = bestSplit(data);
   if (!feature || !groups.left.length || !groups.right.length) return toLeaf(data);
+
+  // Accumulate weighted gini gain per feature for importance
+  if (importances) {
+    const n     = data.length;
+    const nL    = groups.left.length;
+    const nR    = groups.right.length;
+    const giniParent = gini([data], classes) / (n === 0 ? 1 : 1); // already weighted
+    // Simpler: weighted impurity reduction
+    const gain  = giniParent - (nL / n) * splitGini - (nR / n) * splitGini;
+    importances[feature] = (importances[feature] || 0) + gain * n;
+  }
+
   return {
     feature, threshold,
-    left: buildTree(groups.left, depth + 1, maxDepth, minSize),
-    right: buildTree(groups.right, depth + 1, maxDepth, minSize)
+    left:  buildTree(groups.left,  depth + 1, maxDepth, minSize, importances),
+    right: buildTree(groups.right, depth + 1, maxDepth, minSize, importances),
   };
 }
 
@@ -336,7 +376,15 @@ function predictTree(node, row) {
 
 export const trainDecisionTree = (data, params, onStep) => {
   const { maxDepth = 4 } = params;
-  const tree = buildTree(data, 0, maxDepth);
+  const rawImportances = {};
+  const tree = buildTree(data, 0, maxDepth, 2, rawImportances);
+
+  // Normalize importances so they sum to 1
+  const totalImp = Object.values(rawImportances).reduce((s, v) => s + v, 0) || 1;
+  const featureImportance = {
+    x: (rawImportances.x || 0) / totalImp,
+    y: (rawImportances.y || 0) / totalImp,
+  };
 
   if (onStep) onStep(1, { tree, type: 'decisionTree' });
 
@@ -353,7 +401,8 @@ export const trainDecisionTree = (data, params, onStep) => {
       cells.push({ x, y, label: predictTree(tree, { x, y }) });
     }
   }
-  return { tree, cells, xMin, xMax, yMin, yMax, type: 'decisionTree' };
+  const dtCorrect = data.filter(d => predictTree(tree, d) === d.label).length;
+  return { tree, cells, xMin, xMax, yMin, yMax, type: 'decisionTree', accuracy: dtCorrect / data.length, featureImportance };
 };
 
 // ─────────────────────────────────────────────
@@ -362,14 +411,26 @@ export const trainDecisionTree = (data, params, onStep) => {
 export const trainRandomForest = (data, params, onStep) => {
   const { nTrees = 10, maxDepth = 3 } = params;
   const trees = [];
+  const aggregateImportances = { x: 0, y: 0 };
 
   for (let t = 0; t < nTrees; t++) {
     // Bootstrap sample
     const sample = Array.from({ length: data.length }, () => data[Math.floor(Math.random() * data.length)]);
-    const tree = buildTree(sample, 0, maxDepth);
+    const rawImp = {};
+    const tree = buildTree(sample, 0, maxDepth, 2, rawImp);
     trees.push(tree);
+    // Accumulate importances across trees
+    const total = Object.values(rawImp).reduce((s, v) => s + v, 0) || 1;
+    aggregateImportances.x += (rawImp.x || 0) / total;
+    aggregateImportances.y += (rawImp.y || 0) / total;
     if (onStep) onStep(t + 1, { treesBuilt: t + 1, total: nTrees });
   }
+
+  // Average across trees
+  const featureImportance = {
+    x: aggregateImportances.x / nTrees,
+    y: aggregateImportances.y / nTrees,
+  };
 
   const predict = (x, y) => {
     const votes = {};
@@ -393,7 +454,8 @@ export const trainRandomForest = (data, params, onStep) => {
       cells.push({ x, y, label: predict(x, y) });
     }
   }
-  return { trees, cells, xMin, xMax, yMin, yMax, type: 'randomForest', nTrees };
+  const rfCorrect = data.filter(d => predict(d.x, d.y) === d.label).length;
+  return { trees, cells, xMin, xMax, yMin, yMax, type: 'randomForest', nTrees, accuracy: rfCorrect / data.length, featureImportance };
 };
 
 // ─────────────────────────────────────────────
@@ -425,7 +487,9 @@ export const trainSVM = async (data, params, onEpoch) => {
         const margin = d.svmLabel * (w[0] * d.x + w[1] * d.y + b);
         return s + Math.max(0, 1 - margin);
       }, 0) / labeled.length;
-      onEpoch(epoch, { weights: [...w], bias: b, loss, type: 'svm' });
+      const correct = labeled.filter(d => (w[0] * d.x + w[1] * d.y + b >= 0 ? 1 : -1) === d.svmLabel).length;
+      const acc = correct / labeled.length;
+      await onEpoch(epoch, { weights: [...w], bias: b, loss, acc, type: 'svm' });
     }
     await tf.nextFrame();
   }
@@ -437,7 +501,7 @@ export const trainSVM = async (data, params, onEpoch) => {
 //  FEEDFORWARD NEURAL NETWORK (MLP)
 // ─────────────────────────────────────────────
 export const trainFFNN = async (data, params, config, onEpoch) => {
-  const { learningRate = 0.01, epochs = 100 } = params;
+  const { learningRate = 0.01, epochs = 100, validationSplit = 0.2 } = params;
   const { hiddenLayers = [4, 4], activation = 'relu' } = config;
 
   const xs = tf.tensor2d(data.map(d => [d.x, d.y]));
@@ -452,6 +516,7 @@ export const trainFFNN = async (data, params, config, onEpoch) => {
 
   await model.fit(xs, ys, {
     epochs,
+    validationSplit,
     callbacks: {
       onEpochEnd: async (epoch, logs) => {
         if (onEpoch) {
@@ -472,7 +537,7 @@ export const trainFFNN = async (data, params, config, onEpoch) => {
           tf.dispose(testTensor);
           const cells = testPoints.map(([x, y], idx) => ({ x, y, prob: predictions[idx] }));
           const weights = model.layers.map(layer => layer.getWeights()[0]?.arraySync() || []);
-          onEpoch(epoch, { ...logs, weights, cells, xMin, xMax, yMin, yMax, type: 'nn' });
+          await onEpoch(epoch, { ...logs, weights, cells, xMin, xMax, yMin, yMax, type: 'nn' });
         }
         await tf.nextFrame();
       }

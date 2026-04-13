@@ -1,8 +1,9 @@
 "use client";
-import React from 'react';
+import React, { useState } from 'react';
 import { Terminal } from 'lucide-react';
 
-const CODE_MAP = {
+// ── JavaScript / TF.js snippets ──────────────────────────────────────────────
+const JS_MAP = {
   linear: (p) => `// TensorFlow.js — Linear Regression
 const model = tf.sequential();
 model.add(tf.layers.dense({ units: 1, inputShape: [1] }));
@@ -46,7 +47,8 @@ model.add(tf.layers.dense({
 }));
 model.compile({
   optimizer: tf.train.adam(${p.learningRate}),
-  loss: 'binaryCrossentropy'
+  loss: 'binaryCrossentropy',
+  metrics: ['accuracy']
 });
 await model.fit(xs, ys, { epochs: ${p.epochs} });
 // Decision boundary: w1*x + w2*y + b = 0`,
@@ -177,19 +179,248 @@ model.compile({
 await model.fit(xs, ys, { epochs: ${p.epochs} });`,
 };
 
+// ── Python / scikit-learn / Keras snippets ───────────────────────────────────
+const PY_MAP = {
+  linear: (p) => `# scikit-learn — Linear Regression
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+import numpy as np
+
+model = LinearRegression()
+model.fit(X, y)          # X shape: (n, 1)
+
+# Equivalent TF/Keras gradient descent:
+# from tensorflow import keras
+# model = keras.Sequential([keras.layers.Dense(1, input_shape=(1,))])
+# model.compile(optimizer=keras.optimizers.SGD(${p.learningRate}),
+#               loss='mse')
+# model.fit(X, y, epochs=${p.epochs})
+
+print(f"weight = {model.coef_[0]:.4f}")
+print(f"bias   = {model.intercept_[0]:.4f}")
+# y = weight * x + bias`,
+
+  poly: (p) => `# scikit-learn — Polynomial Regression (degree ${p.degree})
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import make_pipeline
+
+model = make_pipeline(
+    PolynomialFeatures(degree=${p.degree}),
+    LinearRegression()
+)
+model.fit(X, y)          # X shape: (n, 1)
+y_pred = model.predict(X_test)
+
+# Keras equivalent:
+# from tensorflow import keras
+# model = keras.Sequential([
+#     keras.layers.Dense(16, activation='relu', input_shape=(${p.degree},)),
+#     keras.layers.Dense(1)
+# ])
+# model.compile(optimizer='adam', loss='mse')
+# model.fit(X_poly, y, epochs=${p.epochs})`,
+
+  ridge: (p) => `# scikit-learn — Ridge Regression (L2)
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_squared_error
+
+# alpha is the L2 regularization strength (λ)
+model = Ridge(alpha=0.1)
+model.fit(X, y)          # X shape: (n, 1)
+
+print(f"weight = {model.coef_[0]:.4f}")
+print(f"bias   = {model.intercept_[0]:.4f}")
+print(f"MSE    = {mean_squared_error(y, model.predict(X)):.4f}")
+
+# Loss = MSE + alpha * sum(w²)
+# Larger alpha → more regularization → smaller weights`,
+
+  logistic: (p) => `# scikit-learn — Logistic Regression
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+
+model = LogisticRegression(
+    solver='lbfgs',
+    max_iter=${p.epochs},
+    C=1.0          # inverse of regularization strength
+)
+model.fit(X, y)  # X shape: (n, 2), y: binary labels
+
+print(f"Accuracy: {accuracy_score(y, model.predict(X)):.2%}")
+print(f"Weights:  {model.coef_[0]}")
+print(f"Bias:     {model.intercept_[0]:.4f}")
+# Decision boundary: w1*x1 + w2*x2 + b = 0`,
+
+  knn: (p) => `# scikit-learn — K-Nearest Neighbors (k=${p.k})
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score
+
+model = KNeighborsClassifier(
+    n_neighbors=${p.k},
+    metric='euclidean'
+)
+model.fit(X_train, y_train)   # No actual "training" — lazy learner
+
+y_pred = model.predict(X_test)
+print(f"Accuracy: {accuracy_score(y_test, y_pred):.2%}")
+
+# Predict a single point:
+# label = model.predict([[x1, x2]])[0]`,
+
+  naiveBayes: () => `# scikit-learn — Gaussian Naive Bayes
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import accuracy_score
+
+# P(y | x1, x2) ∝ P(y) * P(x1|y) * P(x2|y)
+model = GaussianNB()
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+print(f"Accuracy: {accuracy_score(y_test, y_pred):.2%}")
+
+# Class priors: model.class_prior_
+# Feature means per class: model.theta_
+# Feature variances per class: model.var_`,
+
+  svm: (p) => `# scikit-learn — Support Vector Machine
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score
+
+model = SVC(
+    kernel='linear',
+    C=${p.C},          # margin penalty (higher C = less margin)
+    max_iter=${p.epochs}
+)
+model.fit(X_train, y_train)
+
+print(f"Accuracy:       {accuracy_score(y_train, model.predict(X_train)):.2%}")
+print(f"Support vectors: {model.n_support_}")
+print(f"Weights:         {model.coef_[0]}")
+# Boundary: w · x + b = 0`,
+
+  decisionTree: (p) => `# scikit-learn — Decision Tree (CART)
+from sklearn.tree import DecisionTreeClassifier, export_text
+from sklearn.metrics import accuracy_score
+
+model = DecisionTreeClassifier(
+    max_depth=${p.maxDepth},
+    criterion='gini'   # split metric: Gini Impurity
+)
+model.fit(X_train, y_train)
+
+print(f"Accuracy: {accuracy_score(y_train, model.predict(X_train)):.2%}")
+print(export_text(model, feature_names=['x', 'y']))
+
+# Gini Impurity = 1 - Σ pᵢ²
+# Feature importances:
+# print(model.feature_importances_)`,
+
+  randomForest: (p) => `# scikit-learn — Random Forest
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+
+model = RandomForestClassifier(
+    n_estimators=${p.nTrees},   # number of trees
+    max_depth=${p.maxDepth},
+    bootstrap=True,              # random sampling with replacement
+    random_state=42
+)
+model.fit(X_train, y_train)
+
+print(f"Accuracy: {accuracy_score(y_train, model.predict(X_train)):.2%}")
+print(f"Feature importances: {model.feature_importances_}")
+# Each tree votes; majority class wins`,
+
+  kmeans: (p) => `# scikit-learn — K-Means Clustering (k=${p.k})
+from sklearn.cluster import KMeans
+import numpy as np
+
+model = KMeans(
+    n_clusters=${p.k},
+    init='k-means++',   # smarter centroid initialization
+    max_iter=20,
+    random_state=42
+)
+model.fit(X)           # X shape: (n, 2), no labels needed
+
+labels = model.labels_
+centroids = model.cluster_centers_
+print(f"Inertia (WCSS): {model.inertia_:.4f}")`,
+
+  nn: (p) => `# TensorFlow / Keras — Neural Network MLP
+from tensorflow import keras
+from tensorflow.keras import layers
+
+model = keras.Sequential([
+    layers.Dense(4, activation='relu', input_shape=(2,)),
+    layers.Dense(4, activation='relu'),
+    layers.Dense(1, activation='sigmoid')
+])
+model.compile(
+    optimizer=keras.optimizers.Adam(${p.learningRate}),
+    loss='binary_crossentropy',
+    metrics=['accuracy']
+)
+history = model.fit(X, y, epochs=${p.epochs}, verbose=0)
+print(f"Final accuracy: {history.history['accuracy'][-1]:.2%}")`,
+
+  dnn: (p) => `# TensorFlow / Keras — Deep Neural Network
+from tensorflow import keras
+from tensorflow.keras import layers
+
+model = keras.Sequential([
+    layers.Dense(8, activation='relu', input_shape=(2,)),
+    layers.Dense(8, activation='relu'),
+    layers.Dense(4, activation='relu'),
+    layers.Dense(1, activation='sigmoid')
+])
+model.compile(
+    optimizer=keras.optimizers.Adam(${p.learningRate}),
+    loss='binary_crossentropy',
+    metrics=['accuracy']
+)
+history = model.fit(X, y, epochs=${p.epochs}, verbose=0)
+print(f"Final accuracy: {history.history['accuracy'][-1]:.2%}")`,
+};
+
+const LANG_LABELS = { js: 'JavaScript', py: 'Python' };
+
 const CodeSnippet = ({ activeTab, params }) => {
+  const [lang, setLang] = useState('py');
+
   const getCode = () => {
-    const fn = CODE_MAP[activeTab];
-    return fn ? fn(params) : `// ${activeTab} implementation`;
+    const map = lang === 'py' ? PY_MAP : JS_MAP;
+    const fn = map[activeTab];
+    return fn ? fn(params) : `# ${activeTab} implementation`;
   };
 
   return (
-    <div className="bg-slate-950 rounded-xl border border-white/5 overflow-hidden font-mono text-sm">
-      <div className="bg-white/5 px-4 py-2 border-b border-white/5 flex items-center gap-2">
-        <Terminal size={14} className="text-brand-500" />
-        <span className="text-xs text-slate-400">Implementation — {activeTab}</span>
+    <div className="bg-slate-950 rounded-xl border border-white/5 font-mono text-sm flex flex-col">
+      <div className="bg-white/5 px-4 py-2 border-b border-white/5 flex items-center justify-between shrink-0 rounded-t-xl">
+        <div className="flex items-center gap-2">
+          <Terminal size={14} className="text-brand-500" />
+          <span className="text-xs text-slate-400">
+            Implementation — {activeTab} &nbsp;·&nbsp; {LANG_LABELS[lang]}
+          </span>
+        </div>
+        <div className="flex items-center bg-slate-900 rounded-lg p-0.5 gap-0.5">
+          {['py', 'js'].map(l => (
+            <button
+              key={l}
+              onClick={() => setLang(l)}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
+                lang === l
+                  ? 'bg-brand-500 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {l === 'py' ? 'Python' : 'JS'}
+            </button>
+          ))}
+        </div>
       </div>
-      <pre className="p-4 text-slate-300 overflow-x-auto text-xs leading-relaxed">
+      <pre className="p-4 text-slate-300 overflow-x-auto overflow-y-auto text-xs leading-relaxed max-h-44 rounded-b-xl">
         <code>{getCode()}</code>
       </pre>
     </div>

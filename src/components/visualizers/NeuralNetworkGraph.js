@@ -94,8 +94,8 @@ const NeuralNetworkGraph = ({ layers = [2, 4, 4, 1], weights, width = 600, heigh
   }, [layers, weights, width, height]);
 
   return (
-    <div className="bg-slate-900/50 p-4 rounded-xl border border-white/5 shadow-inner">
-      <svg ref={svgRef} width={width} height={height} className="max-w-full h-auto" />
+    <div className="w-full h-full">
+      <svg ref={svgRef} width={width} height={height} className="rounded-xl" style={{ background: 'rgba(15,23,42,0.6)' }} />
     </div>
   );
 };
