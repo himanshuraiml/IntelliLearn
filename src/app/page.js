@@ -1,35 +1,42 @@
 "use client";
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import Link from 'next/link';
 import {
   Play, RotateCcw, Box, Activity, Settings2, BookOpen,
   Download, Share2, Database, ChevronDown,
-  Layers, GitBranch, Cpu, Zap, Target, Grid3x3, Pause, Columns2, Eye
+  Layers, GitBranch, Cpu, Zap, Target, Grid3x3, Pause, Columns2, Eye,
+  PenLine, BarChart3, TrendingUp, LayoutDashboard,
 } from 'lucide-react';
 import * as tf from '@tensorflow/tfjs';
-import CodeSnippet from '@/components/CodeSnippet';
-import NeuralNetworkGraph from '@/components/visualizers/NeuralNetworkGraph';
-import ScatterPlot from '@/components/visualizers/ScatterPlot';
-import ParameterControl from '@/components/ParameterControl';
-import Guide from '@/components/Guide';
-import Quiz from '@/components/Quiz';
-import TrainingChart from '@/components/TrainingChart';
-import ConfusionMatrix from '@/components/ConfusionMatrix';
-import FeatureImportance from '@/components/FeatureImportance';
-import AlgoExplainer from '@/components/AlgoExplainer';
+import CodeSnippet         from '@/components/CodeSnippet';
+import NeuralNetworkGraph  from '@/components/visualizers/NeuralNetworkGraph';
+import ScatterPlot         from '@/components/visualizers/ScatterPlot';
+import DecisionTreeViz     from '@/components/visualizers/DecisionTreeViz';
+import ParameterControl    from '@/components/ParameterControl';
+import Guide               from '@/components/Guide';
+import Quiz                from '@/components/Quiz';
+import TrainingChart       from '@/components/TrainingChart';
+import ConfusionMatrix     from '@/components/ConfusionMatrix';
+import FeatureImportance   from '@/components/FeatureImportance';
+import AlgoExplainer       from '@/components/AlgoExplainer';
+import ROCCurve            from '@/components/ROCCurve';
+import MathFormula         from '@/components/MathFormula';
 import {
   trainLinearRegression, trainPolynomialRegression,
   trainLogisticRegression, trainRidgeRegression,
   trainSVM, trainFFNN,
   predictKNN, buildKNNSurface,
   trainKMeans, trainNaiveBayes, trainDecisionTree, trainRandomForest,
-  exportModel
+  trainPCA,
+  exportModel,
 } from '@/lib/ml-engine';
 import {
   generateLinearData, generatePolynomialData,
   generateClassificationData, generateMultiClassData,
   generateLinearlySeperableData, generateSpiralData,
   generateMoonData, generateIrisData,
-  generateClusteringData, generateClusteringData5
+  generateClusteringData, generateClusteringData5,
+  generatePCAData,
 } from '@/lib/datasets';
 import { saveProgress } from '@/lib/persistence';
 
@@ -55,11 +62,16 @@ const ALGORITHMS = {
     { id: 'nn',           label: 'Neural Network (MLP)',   icon: <Box size={15} />,        desc: 'Multi-layer perceptron that learns non-linear decision boundaries.' },
     { id: 'dnn',          label: 'Deep Neural Net',        icon: <Cpu size={15} />,        desc: 'Deep MLP with more hidden layers for complex patterns.' },
   ],
+  "Dim. Reduction": [
+    { id: 'pca',          label: 'PCA',                    icon: <TrendingUp size={15} />, desc: 'Find the directions of maximum variance (principal components).' },
+  ],
 };
 
 const ALL_ALGOS        = Object.values(ALGORITHMS).flat();
 const REGRESSION_ALGOS = new Set(['linear', 'poly', 'ridge']);
 const CLUSTERING_ALGOS = new Set(['kmeans']);
+const DIM_RED_ALGOS    = new Set(['pca']);
+const CLASSIFIER_ALGOS = new Set(['logistic','knn','naiveBayes','svm','decisionTree','randomForest','nn','dnn']);
 const NEEDS_EPOCH      = new Set(['linear', 'poly', 'ridge', 'logistic', 'svm', 'nn', 'dnn']);
 
 // ─── Hyperparameter hints & warnings ──────────────────────────────────────
@@ -89,56 +101,52 @@ const DATASETS = {
   clustering:     [{ id: 'cluster3',   label: '3 Clusters' },        { id: 'cluster5',   label: '5 Clusters' }],
   deeplearning:   [{ id: 'spiral',     label: 'Spiral' },            { id: 'moon',       label: 'Moon Shapes' },
                    { id: 'blobs',      label: '2-Class Blobs' }],
+  dimred:         [{ id: 'pcadata',    label: 'Ellipse Cloud' }],
 };
 
 function getDatasetCategory(tab) {
   if (REGRESSION_ALGOS.has(tab)) return 'regression';
   if (CLUSTERING_ALGOS.has(tab)) return 'clustering';
+  if (DIM_RED_ALGOS.has(tab))    return 'dimred';
   if (tab === 'nn' || tab === 'dnn') return 'deeplearning';
   return 'classification';
 }
 
-function generateData(datasetId, tab) {
+function generateData(datasetId, tab, nPoints, noiseLevel) {
+  const n = nPoints  || 70;
+  const nl = noiseLevel != null ? noiseLevel : 1;
   switch (datasetId) {
-    case 'synth':       return generateLinearData(60);
-    case 'poly':        return generatePolynomialData(60);
-    case 'blobs':       return generateClassificationData(70);
-    case 'linear_sep':  return generateLinearlySeperableData(60);
-    case 'moon':        return generateMoonData(100);
-    case 'spiral':      return generateSpiralData(100);
-    case 'multiclass':  return generateMultiClassData(90);
-    case 'iris':        return generateIrisData();
-    case 'cluster3':    return generateClusteringData(70, 3);
-    case 'cluster5':    return generateClusteringData5(100);
+    case 'synth':       return generateLinearData(n, nl);
+    case 'poly':        return generatePolynomialData(n, nl);
+    case 'blobs':       return generateClassificationData(n, nl);
+    case 'linear_sep':  return generateLinearlySeperableData(n, nl);
+    case 'moon':        return generateMoonData(n, nl);
+    case 'spiral':      return generateSpiralData(n, nl);
+    case 'multiclass':  return generateMultiClassData(Math.floor(n / 30) * 30 || 90, nl);
+    case 'iris':        return generateIrisData(n, nl);
+    case 'cluster3':    return generateClusteringData(n, 3, nl);
+    case 'cluster5':    return generateClusteringData5(n, nl);
+    case 'pcadata':     return generatePCAData(n, nl);
     default:
-      if (REGRESSION_ALGOS.has(tab)) return generateLinearData(60);
-      if (CLUSTERING_ALGOS.has(tab)) return generateClusteringData(70, 3);
-      return generateClassificationData(70);
+      if (REGRESSION_ALGOS.has(tab))  return generateLinearData(n, nl);
+      if (CLUSTERING_ALGOS.has(tab))  return generateClusteringData(n, 3, nl);
+      if (DIM_RED_ALGOS.has(tab))     return generatePCAData(n, nl);
+      return generateClassificationData(n, nl);
   }
 }
 
-// ─── Train a single algorithm (for comparison mode) ───────────────────────
-async function trainAlgo(tab, data, params, stopRef) {
-  if (tab === 'linear') {
-    return trainLinearRegression(data, params, async () => {});
-  } else if (tab === 'poly') {
-    return trainPolynomialRegression(data, { ...params }, async () => {});
-  } else if (tab === 'ridge') {
-    return trainRidgeRegression(data, params, async () => {});
-  } else if (tab === 'logistic') {
-    return trainLogisticRegression(data, params, async () => {});
-  } else if (tab === 'svm') {
-    return trainSVM(data, params, async () => {});
-  } else if (tab === 'knn') {
-    const surface = buildKNNSurface(data, params.k || 3, 35);
-    return { ...surface, type: 'knn' };
-  } else if (tab === 'naiveBayes') {
-    return trainNaiveBayes(data);
-  } else if (tab === 'decisionTree') {
-    return trainDecisionTree(data, { maxDepth: params.maxDepth });
-  } else if (tab === 'randomForest') {
-    return trainRandomForest(data, { nTrees: params.nTrees, maxDepth: params.maxDepth });
-  } else if (tab === 'nn' || tab === 'dnn') {
+// ─── Comparison helper ────────────────────────────────────────────────────
+async function trainAlgo(tab, data, params) {
+  if (tab === 'linear')       return trainLinearRegression(data, params, async () => {});
+  if (tab === 'poly')         return trainPolynomialRegression(data, { ...params }, async () => {});
+  if (tab === 'ridge')        return trainRidgeRegression(data, params, async () => {});
+  if (tab === 'logistic')     return trainLogisticRegression(data, params, async () => {});
+  if (tab === 'svm')          return trainSVM(data, params, async () => {});
+  if (tab === 'knn')          return { ...buildKNNSurface(data, params.k || 3, 35), type: 'knn' };
+  if (tab === 'naiveBayes')   return trainNaiveBayes(data);
+  if (tab === 'decisionTree') return trainDecisionTree(data, { maxDepth: params.maxDepth });
+  if (tab === 'randomForest') return trainRandomForest(data, { nTrees: params.nTrees, maxDepth: params.maxDepth });
+  if (tab === 'nn' || tab === 'dnn') {
     const hiddenLayers = tab === 'dnn' ? [8, 8, 4] : [4, 4];
     return trainFFNN(data, params, { hiddenLayers, activation: 'relu' }, async () => {});
   }
@@ -163,78 +171,75 @@ export default function Home() {
   const [showAlgoMenu,   setShowAlgoMenu]   = useState(false);
   const [showExplainer,  setShowExplainer]  = useState(false);
 
-  // Feature 1 – Training history for loss/acc chart
+  // Training history
   const [trainingHistory, setTrainingHistory] = useState({ loss: [], acc: [], valLoss: [], valAcc: [] });
 
-  // Feature 3 – Pause / Speed control
-  const [trainingSpeed,  setTrainingSpeed]  = useState(0);   // extra ms per epoch
+  // Pause / Speed
+  const [trainingSpeed,  setTrainingSpeed]  = useState(0);
   const [isPaused,       setIsPaused]       = useState(false);
   const pauseRef   = useRef(false);
   const speedRef   = useRef(0);
   const stopRef    = useRef(false);
-  const guideRef   = useRef(null);           // keyboard → guide nav
+  const guideRef   = useRef(null);
 
-  // Responsive visualization sizing
-  const vizContainerRef = useRef(null);
-  const [vizDims, setVizDims] = useState({ w: 800, h: 520 });
-
-  // Feature 10 – Colorblind-friendly palette toggle
+  // Colorblind
   const [colorblind, setColorblind] = useState(false);
 
-  // Feature 5 – Comparison mode
+  // Decision boundary heatmap toggle
+  const [showBoundary, setShowBoundary] = useState(true);
+
+  // Draw mode
+  const [drawMode,  setDrawMode]  = useState(false);
+  const [drawClass, setDrawClass] = useState(0);
+
+  // Dataset controls
+  const [dataNPoints,    setDataNPoints]    = useState(70);
+  const [dataNoiseLevel, setDataNoiseLevel] = useState(1);
+
+  // Comparison mode
   const [comparisonMode,  setComparisonMode]  = useState(false);
   const [compareTab,      setCompareTab]      = useState('logistic');
   const [compareResult,   setCompareResult]   = useState(null);
   const [showCompareMenu, setShowCompareMenu] = useState(false);
+
+  // Responsive sizing
+  const vizContainerRef = useRef(null);
+  const [vizDims, setVizDims] = useState({ w: 800, h: 520 });
 
   const category       = getDatasetCategory(activeTab);
   const datasetOptions = DATASETS[category] || DATASETS.classification;
   const currentAlgo    = ALL_ALGOS.find(a => a.id === activeTab) || ALL_ALGOS[0];
   const compareAlgo    = ALL_ALGOS.find(a => a.id === compareTab) || ALL_ALGOS[1];
 
-  // Algorithms in the same category as the primary (for compare picker)
   const comparableAlgos = useMemo(() => {
     const group = Object.values(ALGORITHMS).find(items => items.some(a => a.id === activeTab)) ?? [];
     return group.filter(a => a.id !== activeTab);
   }, [activeTab]);
 
-  // Auto-select a sensible compare target when primary changes
   useEffect(() => {
     if (comparableAlgos.length) setCompareTab(comparableAlgos[0].id);
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync dataset category when algorithm changes
   useEffect(() => {
     const opts = DATASETS[getDatasetCategory(activeTab)] || [];
     setActiveDataset(opts[0]?.id || 'synth');
   }, [activeTab]);
 
-  // Full reset on algo or dataset switch
-  useEffect(() => { handleReset(); }, [activeTab, activeDataset]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { handleReset(); }, [activeTab, activeDataset, dataNPoints, dataNoiseLevel]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Feature 10 – Keyboard shortcuts
   useEffect(() => {
     const handler = (e) => {
-      // Ignore when focus is inside an input / select
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
-      if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault();
-        if (!isTraining) handleTrain();
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        guideRef.current?.prev();
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        guideRef.current?.next();
-      } else if (e.key === 'r' || e.key === 'R') {
-        if (!isTraining) handleReset();
-      }
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!isTraining) handleTrain(); }
+      else if (e.key === 'ArrowLeft')  { e.preventDefault(); guideRef.current?.prev(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); guideRef.current?.next(); }
+      else if (e.key === 'r' || e.key === 'R') { if (!isTraining) handleReset(); }
+      else if (e.key === 'd' || e.key === 'D') { setDrawMode(v => !v); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [isTraining]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Measure visualization container so charts fill it exactly
   useEffect(() => {
     const el = vizContainerRef.current;
     if (!el) return;
@@ -246,9 +251,10 @@ export default function Home() {
     return () => ro.disconnect();
   }, []);
 
+  // ── Reset ─────────────────────────────────────────────────────────────────
   const handleReset = () => {
     stopRef.current = true;
-    setData(generateData(activeDataset, activeTab));
+    setData(generateData(activeDataset, activeTab, dataNPoints, dataNoiseLevel));
     setModelResult(null); setFullModel(null); setNnWeights(null);
     setProgress(0); setCurrentEpoch(null);
     setLiveMetrics({ loss: null, acc: null });
@@ -256,6 +262,7 @@ export default function Home() {
     setTrainingHistory({ loss: [], acc: [], valLoss: [], valAcc: [] });
     setCompareResult(null);
     setIsPaused(false); pauseRef.current = false;
+    setDrawMode(false);
   };
 
   const handleExport = () => { if (fullModel) exportModel(fullModel, `${activeTab}-model`); };
@@ -272,29 +279,46 @@ export default function Home() {
     setIsPaused(v => { pauseRef.current = !v; return !v; });
   };
 
-  // ── Epoch callback (Feature 1 + 3 together) ───────────────────────────────
+  // ── Draw mode handlers ────────────────────────────────────────────────────
+  const handlePointAdded = (x, y) => {
+    setData(prev => [...prev, { x, y, label: drawClass }]);
+    // Invalidate trained model since data changed
+    setModelResult(null); setFullModel(null);
+  };
+
+  const handleRemoveNearest = (x, y) => {
+    setData(prev => {
+      if (!prev.length) return prev;
+      let minD = Infinity, minI = 0;
+      prev.forEach((pt, i) => {
+        const d = (pt.x - x) ** 2 + (pt.y - y) ** 2;
+        if (d < minD) { minD = d; minI = i; }
+      });
+      return prev.filter((_, i) => i !== minI);
+    });
+    setModelResult(null); setFullModel(null);
+  };
+
+  // ── Epoch callback ────────────────────────────────────────────────────────
   const makeEpochCB = (totalEpochs) => async (epoch, logs) => {
     if (stopRef.current) return;
 
-    const pct     = Math.round(((epoch + 1) / totalEpochs) * 100);
-    const accVal  = logs.acc ?? logs.accuracy;
+    const pct    = Math.round(((epoch + 1) / totalEpochs) * 100);
+    const accVal = logs.acc ?? logs.accuracy;
     const valLoss = logs.val_loss   ?? null;
     const valAcc  = logs.val_acc ?? logs.val_accuracy ?? null;
 
     setProgress(pct);
     setCurrentEpoch(epoch);
-    const isRegression = REGRESSION_ALGOS.has(activeTab);
+    const isReg = REGRESSION_ALGOS.has(activeTab);
     setLiveMetrics({
       loss: logs.loss != null ? logs.loss.toFixed(4) : null,
       acc:  accVal    != null
-              ? isRegression
-                ? accVal.toFixed(3)                        // R² as 0.000
-                : (accVal * 100).toFixed(1) + '%'          // accuracy as 87.3%
-              : null,
+        ? isReg ? accVal.toFixed(3) : (accVal * 100).toFixed(1) + '%'
+        : null,
     });
     setModelResult({ ...logs });
 
-    // Accumulate history for TrainingChart (train + val)
     if (logs.loss != null) {
       setTrainingHistory(prev => ({
         loss:    [...prev.loss, logs.loss],
@@ -304,18 +328,15 @@ export default function Home() {
       }));
     }
 
-    // Pause: hold here until resumed
     while (pauseRef.current && !stopRef.current) {
       await new Promise(r => setTimeout(r, 80));
     }
-
-    // Speed delay
     if (speedRef.current > 0) {
       await new Promise(r => setTimeout(r, speedRef.current));
     }
   };
 
-  // ── Main Train ─────────────────────────────────────────────────────────────
+  // ── Main Train ────────────────────────────────────────────────────────────
   const handleTrain = async () => {
     if (isTraining) return;
     stopRef.current  = false;
@@ -330,7 +351,6 @@ export default function Home() {
     const epochCB = makeEpochCB(params.epochs);
 
     try {
-      // ─── Gradient-descent / TF.js algorithms ────────────────────────────
       if (activeTab === 'linear') {
         const r = await trainLinearRegression(data, params, epochCB);
         if (!stopRef.current) { setModelResult(r); setFullModel(r.model); saveProgress('linear', 100); }
@@ -362,7 +382,6 @@ export default function Home() {
           setNnWeights(r.weights); setFullModel(r.model); saveProgress('nn', 100);
         }
 
-      // ─── Instant / non-epoch algorithms ─────────────────────────────────
       } else if (activeTab === 'knn') {
         setProgress(50);
         const surface    = buildKNNSurface(data, params.k || 3, 35);
@@ -405,14 +424,22 @@ export default function Home() {
           stepResult = { type: 'kmeans', centroids };
           setModelResult({ type: 'kmeans', centroids });
         });
-        if (!stopRef.current && stepResult) {
-          setProgress(100);
+        if (!stopRef.current && stepResult) setProgress(100);
+
+      } else if (activeTab === 'pca') {
+        setProgress(50);
+        const r = trainPCA(data);
+        setProgress(100); setCurrentEpoch(0);
+        if (r) {
+          setLiveMetrics({ loss: null, acc: (r.explainedVar1 * 100).toFixed(1) + '%' });
+          setModelResult(r);
+          saveProgress('pca', Math.round(r.explainedVar1 * 100));
         }
       }
 
-      // ─── Feature 5: Comparison training ─────────────────────────────────
+      // Comparison training
       if (comparisonMode && !stopRef.current && compareTab !== 'kmeans') {
-        const cmpOut = await trainAlgo(compareTab, data, params, stopRef);
+        const cmpOut = await trainAlgo(compareTab, data, params);
         if (!stopRef.current && cmpOut) setCompareResult(cmpOut);
       }
 
@@ -424,11 +451,9 @@ export default function Home() {
     setProgress(100);
   };
 
-  // ── Feature 2: Click-to-predict ────────────────────────────────────────────
+  // ── Click-to-predict ──────────────────────────────────────────────────────
   const predictPoint = useMemo(() => {
     if (!modelResult) return null;
-
-    // Regression
     if (REGRESSION_ALGOS.has(activeTab)) {
       if (modelResult.weight !== undefined) {
         const { weight, bias } = modelResult;
@@ -443,8 +468,6 @@ export default function Home() {
       }
       return null;
     }
-
-    // Clustering
     if (CLUSTERING_ALGOS.has(activeTab) && modelResult.centroids) {
       const { centroids } = modelResult;
       return (x, y) => {
@@ -456,8 +479,6 @@ export default function Home() {
         return { type: 'cluster', label: cluster };
       };
     }
-
-    // Classifiers with closed-form weights
     if (activeTab === 'logistic' && modelResult.weights) {
       const [w1, w2] = modelResult.weights, b = modelResult.bias;
       return (x, y) => {
@@ -467,35 +488,23 @@ export default function Home() {
     }
     if (activeTab === 'svm' && modelResult.weights) {
       const [w1, w2] = modelResult.weights, b = modelResult.bias;
-      return (x, y) => ({
-        type: 'class', label: (w1 * x + w2 * y + b) >= 0 ? 1 : 0, confidence: null,
-      });
+      return (x, y) => ({ type: 'class', label: (w1 * x + w2 * y + b) >= 0 ? 1 : 0, confidence: null });
     }
-
-    // Naive Bayes has its own embedded predict function
     if (activeTab === 'naiveBayes' && modelResult.predict) {
       const predictFn = modelResult.predict;
       return (x, y) => ({ type: 'class', label: predictFn(x, y), confidence: null });
     }
-
-    // Surface-cell lookup (KNN, DTree, RF)
     if (modelResult.cells) {
       const cells = modelResult.cells;
       return (x, y) => {
         let minD = Infinity, label = 0, prob = null;
         cells.forEach(cell => {
           const d = (cell.x - x) ** 2 + (cell.y - y) ** 2;
-          if (d < minD) {
-            minD = d;
-            label = cell.prob !== undefined ? (cell.prob >= 0.5 ? 1 : 0) : cell.label;
-            prob  = cell.prob ?? null;
-          }
+          if (d < minD) { minD = d; label = cell.prob !== undefined ? (cell.prob >= 0.5 ? 1 : 0) : cell.label; prob = cell.prob ?? null; }
         });
         return { type: 'class', label, confidence: prob != null ? Math.max(prob, 1 - prob) : null };
       };
     }
-
-    // Neural network – synchronous TF.js prediction via dataSync()
     if ((activeTab === 'nn' || activeTab === 'dnn') && fullModel) {
       const model = fullModel;
       return (x, y) => {
@@ -505,18 +514,41 @@ export default function Home() {
         return { type: 'class', label: pred >= 0.5 ? 1 : 0, confidence: Math.max(pred, 1 - pred) };
       };
     }
-
     return null;
   }, [modelResult, activeTab, fullModel]);
 
-  // ── Feature 4: Confusion matrix (derived from predictPoint + data) ─────────
+  // ── Boundary heatmap overlay for logistic/SVM (computed from weights) ────
+  const scatterRegressionLine = useMemo(() => {
+    if (!modelResult || !showBoundary) return modelResult;
+    if (!CLASSIFIER_ALGOS.has(activeTab)) return modelResult;
+    // KNN, NB, DTree, RF, NN already have cells — just pass through
+    if (modelResult.cells) return modelResult;
+    // For logistic / SVM: compute cells from the analytical predict function
+    if (!predictPoint) return modelResult;
+    const xVals = data.map(d => d.x), yVals = data.map(d => d.y);
+    if (!xVals.length) return modelResult;
+    const xMin = Math.min(...xVals) - 1, xMax = Math.max(...xVals) + 1;
+    const yMin = Math.min(...yVals) - 1, yMax = Math.max(...yVals) + 1;
+    const res  = 40;
+    const cells = [];
+    for (let i = 0; i <= res; i++) {
+      for (let j = 0; j <= res; j++) {
+        const x = xMin + (i / res) * (xMax - xMin);
+        const y = yMin + (j / res) * (yMax - yMin);
+        const result = predictPoint(x, y);
+        if (result) cells.push({ x, y, label: result.label, prob: result.confidence ?? undefined });
+      }
+    }
+    return { ...modelResult, cells, xMin, xMax, yMin, yMax };
+  }, [modelResult, showBoundary, predictPoint, data, activeTab]);
+
+  // ── Confusion matrix ──────────────────────────────────────────────────────
   const confusionMatrix = useMemo(() => {
     if (!predictPoint) return null;
-    if (REGRESSION_ALGOS.has(activeTab) || CLUSTERING_ALGOS.has(activeTab)) return null;
+    if (!CLASSIFIER_ALGOS.has(activeTab)) return null;
     if (!data.length) return null;
     const classIds = [...new Set(data.map(d => d.label))].sort((a, b) => a - b);
     if (classIds.length < 2 || classIds.length > 6) return null;
-
     const n      = classIds.length;
     const idx    = Object.fromEntries(classIds.map((c, i) => [c, i]));
     const matrix = Array.from({ length: n }, () => new Array(n).fill(0));
@@ -528,6 +560,49 @@ export default function Home() {
     });
     return { matrix, labels: classIds.map(String) };
   }, [predictPoint, data, activeTab]);
+
+  // ── Raw probability function for ROC (logistic / NN / NaiveBayes only) ───
+  const rawProbFn = useMemo(() => {
+    if (!modelResult) return null;
+    if (activeTab === 'logistic' && modelResult.weights) {
+      const [w1, w2] = modelResult.weights, b = modelResult.bias;
+      return (x, y) => 1 / (1 + Math.exp(-(w1 * x + w2 * y + b)));
+    }
+    if ((activeTab === 'nn' || activeTab === 'dnn') && fullModel) {
+      const model = fullModel;
+      return (x, y) => {
+        const t    = tf.tensor2d([[x, y]]);
+        const prob = model.predict(t).dataSync()[0];
+        t.dispose();
+        return prob;
+      };
+    }
+    if (activeTab === 'naiveBayes' && modelResult.stats) {
+      const { stats } = modelResult;
+      const gaussPdf = (x, m, v) => Math.exp(-0.5 * (x - m) ** 2 / v) / Math.sqrt(2 * Math.PI * v);
+      const classes  = Object.keys(stats).map(Number);
+      if (classes.length !== 2) return null;
+      const cls1 = classes[1];
+      return (x, y) => {
+        let logProbs = {};
+        classes.forEach(cls => {
+          const s = stats[cls];
+          logProbs[cls] = Math.log(s.prior)
+            + Math.log(gaussPdf(x, s.mean.x, s.variance.x) + 1e-10)
+            + Math.log(gaussPdf(y, s.mean.y, s.variance.y) + 1e-10);
+        });
+        const maxLog = Math.max(...Object.values(logProbs));
+        const sumExp = classes.reduce((s, c) => s + Math.exp(logProbs[c] - maxLog), 0);
+        return Math.exp(logProbs[cls1] - maxLog) / sumExp;
+      };
+    }
+    return null;
+  }, [modelResult, activeTab, fullModel]);
+
+  // ── Max class count for draw mode class picker ────────────────────────────
+  const maxDrawClass = CLUSTERING_ALGOS.has(activeTab) ? 0
+    : data.length ? Math.max(...data.map(d => d.label ?? 0)) + 1
+    : 2;
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
@@ -586,12 +661,10 @@ export default function Home() {
           )}
         </div>
 
-        {/* Feature 3: Training Speed (only for gradient-descent algos) */}
+        {/* Training Speed */}
         {NEEDS_EPOCH.has(activeTab) && (
           <div className="px-4 pt-3 pb-3 border-b border-white/5">
-            <div className="text-[10px] text-slate-500 mb-1.5 font-semibold uppercase tracking-widest">
-              Training Speed
-            </div>
+            <div className="text-[10px] text-slate-500 mb-1.5 font-semibold uppercase tracking-widest">Training Speed</div>
             <div className="flex gap-1">
               {[{ label: '⚡ Fast', ms: 0 }, { label: '▶ Normal', ms: 80 }, { label: '🐢 Slow', ms: 400 }].map(s => (
                 <button key={s.ms} onClick={() => { setTrainingSpeed(s.ms); speedRef.current = s.ms; }}
@@ -603,7 +676,6 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <p className="text-[9px] text-slate-600 mt-1.5">Slow mode lets you watch each epoch step.</p>
           </div>
         )}
 
@@ -613,45 +685,87 @@ export default function Home() {
             <Database size={13} /><span className="font-semibold">Dataset</span>
           </div>
           <select value={activeDataset} onChange={e => setActiveDataset(e.target.value)}
-            className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-brand-500">
+            className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-brand-500 mb-3">
             {datasetOptions.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
           </select>
+
+          {/* Sample size slider */}
+          <div className="mb-2">
+            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+              <span>Sample Size</span><span className="font-mono text-slate-400">{dataNPoints}</span>
+            </div>
+            <input type="range" min={20} max={200} step={10} value={dataNPoints}
+              onChange={e => setDataNPoints(parseInt(e.target.value))}
+              className="w-full h-1.5 rounded-full bg-slate-700 accent-brand-500 cursor-pointer" />
+            <div className="flex justify-between text-[9px] text-slate-600 mt-0.5"><span>20</span><span>200</span></div>
+          </div>
+
+          {/* Noise level slider */}
+          <div>
+            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+              <span>Noise Level</span><span className="font-mono text-slate-400">{dataNoiseLevel.toFixed(1)}</span>
+            </div>
+            <input type="range" min={0.1} max={4} step={0.1} value={dataNoiseLevel}
+              onChange={e => setDataNoiseLevel(parseFloat(e.target.value))}
+              className="w-full h-1.5 rounded-full bg-slate-700 accent-brand-500 cursor-pointer" />
+            <div className="flex justify-between text-[9px] text-slate-600 mt-0.5"><span>Clean</span><span>Noisy</span></div>
+          </div>
         </div>
 
         {/* Actions */}
         <div className="p-4 space-y-2 mt-auto">
-          {/* Colorblind palette toggle */}
-          <button
-            onClick={() => setColorblind(v => !v)}
-            title="Toggle colorblind-friendly palette"
-            aria-pressed={colorblind}
+          {/* Colorblind toggle */}
+          <button onClick={() => setColorblind(v => !v)} title="Toggle colorblind-friendly palette" aria-pressed={colorblind}
             className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-              colorblind
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                : 'bg-slate-800 border-white/10 text-slate-500 hover:text-slate-300'
-            }`}>
-            <Eye size={13} />
-            {colorblind ? 'Colorblind mode ON' : 'Colorblind-friendly mode'}
+              colorblind ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' : 'bg-slate-800 border-white/10 text-slate-500 hover:text-slate-300'}`}>
+            <Eye size={13} />{colorblind ? 'Colorblind mode ON' : 'Colorblind-friendly mode'}
           </button>
 
+          {/* Draw mode toggle */}
+          {!REGRESSION_ALGOS.has(activeTab) && !DIM_RED_ALGOS.has(activeTab) && (
+            <div className="space-y-1.5">
+              <button onClick={() => setDrawMode(v => !v)} title="Toggle draw mode (D)" aria-pressed={drawMode}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                  drawMode ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-slate-800 border-white/10 text-slate-500 hover:text-slate-300'}`}>
+                <PenLine size={13} />{drawMode ? 'Draw mode ON (D)' : 'Draw points (D)'}
+              </button>
+              {drawMode && (
+                <div className="flex gap-1">
+                  {Array.from({ length: Math.max(2, maxDrawClass) }, (_, i) => i).map(cls => (
+                    <button key={cls} onClick={() => setDrawClass(cls)}
+                      className={`flex-1 py-1 rounded-md text-[10px] font-semibold transition-all border ${
+                        drawClass === cls ? 'border-white/30' : 'border-white/5 opacity-50'}`}
+                      style={drawClass === cls ? { background: `hsl(${cls * 120}, 60%, 40%)` } : {}}>
+                      C{cls}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Boundary toggle */}
+          {CLASSIFIER_ALGOS.has(activeTab) && (
+            <button onClick={() => setShowBoundary(v => !v)} aria-pressed={showBoundary}
+              className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                showBoundary ? 'bg-purple-500/10 border-purple-500/30 text-purple-400' : 'bg-slate-800 border-white/10 text-slate-500 hover:text-slate-300'}`}>
+              <BarChart3 size={13} />{showBoundary ? 'Boundary ON' : 'Show boundary'}
+            </button>
+          )}
+
           <div className="flex gap-2">
-            <button onClick={handleTrain} disabled={isTraining}
-              aria-label="Train model (Space)"
+            <button onClick={handleTrain} disabled={isTraining} aria-label="Train model (Space)"
               className="flex-1 bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white py-2 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-brand-500/20 text-sm">
               <Play size={15} fill="currentColor" />{isTraining ? 'Training…' : 'Train'}
             </button>
-
-            {/* Pause (visible only during epoch-based training) */}
             {isTraining && NEEDS_EPOCH.has(activeTab) && (
-              <button onClick={handlePause}
-                title={isPaused ? 'Resume' : 'Pause'}
+              <button onClick={handlePause} title={isPaused ? 'Resume' : 'Pause'}
                 className={`px-2.5 rounded-xl font-semibold transition-all border ${isPaused
                   ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
                   : 'bg-slate-800 border-white/10 text-slate-400 hover:text-white'}`}>
                 {isPaused ? <Play size={14} /> : <Pause size={14} />}
               </button>
             )}
-
             <button onClick={handleReset} disabled={isTraining}
               className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-xl transition-all">
               <RotateCcw size={16} />
@@ -668,16 +782,17 @@ export default function Home() {
             </button>
           </div>
 
+          <Link href="/dashboard"
+            className="w-full flex items-center justify-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-white/10 rounded-lg text-xs text-slate-400 hover:text-slate-200 transition-all">
+            <LayoutDashboard size={13} /> Dashboard
+          </Link>
+
           <div className="pt-3 mt-1 border-t border-white/5 text-center">
             <p className="text-[10px] text-slate-600 leading-relaxed">
               Developed by <span className="text-slate-400 font-semibold">Dr. Himanshu Rai</span>
               <br />
-              <a
-                href="https://www.linkedin.com/in/himanshurai14/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-500 hover:text-blue-400 transition-colors"
-              >
+              <a href="https://www.linkedin.com/in/himanshurai14/" target="_blank" rel="noopener noreferrer"
+                className="text-blue-500 hover:text-blue-400 transition-colors">
                 Follow on LinkedIn
               </a>
             </p>
@@ -691,7 +806,7 @@ export default function Home() {
         {/* Top Bar */}
         <header className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-slate-950/60 backdrop-blur shrink-0 relative z-20 gap-4">
 
-          {/* Primary Algorithm Picker */}
+          {/* Algorithm Picker */}
           <div className="relative">
             <button onClick={() => setShowAlgoMenu(v => !v)}
               className="flex items-center gap-3 px-4 py-2 bg-slate-900 border border-white/10 rounded-xl hover:border-brand-500/50 transition-all">
@@ -704,7 +819,6 @@ export default function Home() {
                 </div>
               </div>
             </button>
-
             {showAlgoMenu && (
               <div className="absolute top-full left-0 mt-2 w-72 bg-slate-900 border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl">
                 {Object.entries(ALGORITHMS).map(([cat, items]) => (
@@ -722,17 +836,13 @@ export default function Home() {
             )}
           </div>
 
-          {/* "Explain" button — opens the deep-dive popup */}
-          <button
-            onClick={() => setShowExplainer(true)}
-            title="Read a detailed explanation of this algorithm"
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-slate-400 hover:border-brand-500/50 hover:text-brand-400 transition-all text-xs font-semibold shrink-0"
-          >
-            <BookOpen size={13} />
-            <span className="hidden sm:inline">Explain</span>
+          {/* Explain button */}
+          <button onClick={() => setShowExplainer(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-slate-400 hover:border-brand-500/50 hover:text-brand-400 transition-all text-xs font-semibold shrink-0">
+            <BookOpen size={13} /><span className="hidden sm:inline">Explain</span>
           </button>
 
-          {/* Compare picker (shown when comparison mode is active) */}
+          {/* Compare picker */}
           {comparisonMode && comparableAlgos.length > 0 && (
             <div className="relative">
               <button onClick={() => setShowCompareMenu(v => !v)}
@@ -754,10 +864,8 @@ export default function Home() {
             </div>
           )}
 
-          {/* Centre description */}
           <p className="text-sm text-slate-400 max-w-xs text-center hidden xl:block flex-1">{currentAlgo.desc}</p>
 
-          {/* Right: compare toggle + progress */}
           <div className="flex items-center gap-3 shrink-0">
             <button onClick={() => setComparisonMode(v => !v)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${comparisonMode
@@ -765,13 +873,11 @@ export default function Home() {
                 : 'bg-slate-900 border-white/10 text-slate-400 hover:border-white/20 hover:text-slate-200'}`}>
               <Columns2 size={13} /> Compare
             </button>
-
             {isTraining && (
               <div className="flex items-center gap-2">
                 {isPaused && <span className="text-xs text-amber-400 font-mono animate-pulse">⏸ Paused</span>}
                 <div className="w-28 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                  <div className="h-full bg-brand-500 transition-all duration-150 rounded-full"
-                    style={{ width: `${progress}%` }} />
+                  <div className="h-full bg-brand-500 transition-all duration-150 rounded-full" style={{ width: `${progress}%` }} />
                 </div>
                 <span className="text-xs font-mono text-brand-400">{progress}%</span>
               </div>
@@ -788,33 +894,31 @@ export default function Home() {
           {/* Center: Visualization + Code */}
           <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
 
-            {/* Visualization Card — fills all remaining vertical space */}
+            {/* Visualization Card */}
             <div className="flex-1 min-h-0 bg-slate-900/40 rounded-2xl border border-white/5 overflow-hidden p-2">
               <div ref={vizContainerRef} className="w-full h-full">
                 {comparisonMode ? (
-                  /* Side-by-side comparison */
                   <div className="grid grid-cols-2 gap-3 h-full">
                     <div className="flex flex-col h-full">
                       <div className="text-[10px] text-slate-400 font-semibold px-2 pb-1 flex items-center gap-1.5 shrink-0">
-                        <span className="w-2 h-2 rounded-full bg-brand-500 inline-block" />
-                        {currentAlgo.label}
+                        <span className="w-2 h-2 rounded-full bg-brand-500 inline-block" />{currentAlgo.label}
                       </div>
-                      <ScatterPlot data={data} regressionLine={modelResult} isTraining={isTraining}
+                      <ScatterPlot data={data} regressionLine={scatterRegressionLine} isTraining={isTraining}
                         currentEpoch={currentEpoch} totalEpochs={params.epochs}
-                        predictPoint={predictPoint} colorblind={colorblind}
+                        predictPoint={drawMode ? null : predictPoint}
+                        colorblind={colorblind} showSurface={showBoundary}
+                        drawMode={drawMode} drawClass={drawClass}
+                        onPointAdded={handlePointAdded} onRemoveNearest={handleRemoveNearest}
                         width={Math.max(200, Math.floor(vizDims.w / 2) - 10)}
                         height={Math.max(200, vizDims.h - 22)} />
                     </div>
                     <div className="flex flex-col h-full">
                       <div className="text-[10px] text-slate-400 font-semibold px-2 pb-1 flex items-center gap-1.5 shrink-0">
-                        <span className="w-2 h-2 rounded-full bg-purple-400 inline-block" />
-                        {compareAlgo.label}
-                        {!compareResult && (
-                          <span className="text-slate-600 font-normal ml-1">— train to compare</span>
-                        )}
+                        <span className="w-2 h-2 rounded-full bg-purple-400 inline-block" />{compareAlgo.label}
+                        {!compareResult && <span className="text-slate-600 font-normal ml-1">— train to compare</span>}
                       </div>
                       <ScatterPlot data={data} regressionLine={compareResult} isTraining={false}
-                        colorblind={colorblind}
+                        colorblind={colorblind} showSurface={showBoundary}
                         width={Math.max(200, Math.floor(vizDims.w / 2) - 10)}
                         height={Math.max(200, vizDims.h - 22)} />
                     </div>
@@ -827,27 +931,33 @@ export default function Home() {
                       height={Math.max(200, vizDims.h)} />
                     <ScatterPlot data={data} regressionLine={modelResult} isTraining={isTraining}
                       currentEpoch={currentEpoch} totalEpochs={params.epochs}
-                      predictPoint={predictPoint} colorblind={colorblind}
+                      predictPoint={drawMode ? null : predictPoint}
+                      colorblind={colorblind} showSurface={showBoundary}
+                      drawMode={drawMode} drawClass={drawClass}
+                      onPointAdded={handlePointAdded} onRemoveNearest={handleRemoveNearest}
                       width={Math.max(200, Math.ceil(vizDims.w / 2) - 5)}
                       height={Math.max(200, vizDims.h)} />
                   </div>
                 ) : (
-                  <ScatterPlot data={data} regressionLine={modelResult} isTraining={isTraining}
+                  <ScatterPlot data={data} regressionLine={scatterRegressionLine} isTraining={isTraining}
                     currentEpoch={currentEpoch} totalEpochs={params.epochs}
-                    predictPoint={predictPoint} colorblind={colorblind}
+                    predictPoint={drawMode ? null : predictPoint}
+                    colorblind={colorblind} showSurface={showBoundary}
+                    drawMode={drawMode} drawClass={drawClass}
+                    onPointAdded={handlePointAdded} onRemoveNearest={handleRemoveNearest}
                     width={Math.max(400, vizDims.w)}
                     height={Math.max(300, vizDims.h)} />
                 )}
               </div>
             </div>
 
-            {/* Code Snippet — scrollable within fixed height */}
+            {/* Code Snippet */}
             <div className="shrink-0">
               <CodeSnippet activeTab={activeTab} params={params} />
             </div>
           </div>
 
-          {/* Right Panel — wider to comfortably fit all content */}
+          {/* Right Panel */}
           <aside className="w-96 shrink-0 border-l border-white/5 bg-slate-900/30 overflow-y-auto p-4 space-y-4">
 
             {/* Live Metrics */}
@@ -856,12 +966,14 @@ export default function Home() {
               <div className="grid grid-cols-2 gap-3">
                 <MetricCard label="Loss"     value={liveMetrics.loss ?? '—'} highlight={!!liveMetrics.loss} />
                 <MetricCard
-                  label={REGRESSION_ALGOS.has(activeTab) ? 'R² Score' : 'Accuracy'}
+                  label={REGRESSION_ALGOS.has(activeTab) ? 'R² Score' : activeTab === 'pca' ? 'PC1 Variance' : 'Accuracy'}
                   value={liveMetrics.acc ?? '—'}
                   highlight={!!liveMetrics.acc}
                 />
                 <MetricCard label="Progress" value={`${progress}%`}          highlight={isTraining} />
-                <MetricCard label="Epoch"    value={currentEpoch !== null ? currentEpoch + 1 : '—'} highlight={isTraining} />
+                <MetricCard label={activeTab === 'pca' ? 'Components' : 'Epoch'}
+                  value={activeTab === 'pca' && modelResult ? '2' : currentEpoch !== null ? currentEpoch + 1 : '—'}
+                  highlight={isTraining} />
               </div>
               {NEEDS_EPOCH.has(activeTab) && (
                 <div className="mt-3">
@@ -877,42 +989,73 @@ export default function Home() {
               )}
             </div>
 
-            {/* Training History Chart — lives in right panel so viz gets full height */}
+            {/* Math Formula */}
+            <MathFormula algo={activeTab} params={params} modelResult={modelResult} />
+
+            {/* Training History Chart */}
             {NEEDS_EPOCH.has(activeTab) && (
-              <TrainingChart
-                key={activeTab}
-                history={trainingHistory}
-                isRegression={REGRESSION_ALGOS.has(activeTab)}
-              />
+              <TrainingChart key={activeTab} history={trainingHistory} isRegression={REGRESSION_ALGOS.has(activeTab)} />
             )}
 
             {/* Confusion Matrix */}
-            {confusionMatrix && (
-              <ConfusionMatrix matrix={confusionMatrix.matrix} labels={confusionMatrix.labels} />
-            )}
+            {confusionMatrix && <ConfusionMatrix matrix={confusionMatrix.matrix} labels={confusionMatrix.labels} />}
 
-            {/* Feature Importance (Decision Tree & Random Forest) */}
+            {/* ROC Curve (logistic, NN, NaiveBayes) */}
+            {rawProbFn && <ROCCurve data={data} getRawProb={rawProbFn} />}
+
+            {/* Feature Importance */}
             {modelResult?.featureImportance && (activeTab === 'decisionTree' || activeTab === 'randomForest') && (
               <FeatureImportance importance={modelResult.featureImportance} modelType={activeTab} />
+            )}
+
+            {/* Decision Tree Visualizer */}
+            {activeTab === 'decisionTree' && modelResult?.tree && (
+              <DecisionTreeViz tree={modelResult.tree} width={360} height={260} />
+            )}
+
+            {/* PCA Explained Variance */}
+            {activeTab === 'pca' && modelResult?.explainedVar1 != null && (
+              <div className="bg-slate-900/80 rounded-xl border border-white/5 p-4">
+                <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-3">Explained Variance</h3>
+                {[
+                  { label: 'PC1', value: modelResult.explainedVar1, color: '#f59e0b' },
+                  { label: 'PC2', value: modelResult.explainedVar2, color: '#a78bfa' },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="mb-2">
+                    <div className="flex justify-between text-xs mb-1">
+                      <span style={{ color }}>{label}</span>
+                      <span className="font-mono text-slate-300">{(value * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all duration-700"
+                        style={{ width: `${value * 100}%`, background: color }} />
+                    </div>
+                  </div>
+                ))}
+                <p className="text-[10px] text-slate-600 mt-2">
+                  Together: {((modelResult.explainedVar1 + modelResult.explainedVar2) * 100).toFixed(1)}% of total variance
+                </p>
+              </div>
             )}
 
             <Guide activeTab={activeTab} stepRef={guideRef} />
             <Quiz  activeTab={activeTab} />
 
-            {/* How it works + keyboard hint */}
+            {/* How it works */}
             <div className="bg-slate-900/80 p-4 rounded-xl border border-white/5">
               <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">How it works</h3>
               <p className="text-xs text-slate-400 leading-relaxed">{currentAlgo.desc}</p>
               <div className="mt-3 pt-3 border-t border-white/5 text-[10px] text-slate-500 space-y-1">
                 {NEEDS_EPOCH.has(activeTab)   && <div>📈 Watch the curve animate each epoch</div>}
                 {NEEDS_EPOCH.has(activeTab)   && <div>⏸ Pause to inspect any epoch in detail</div>}
-                {predictPoint                  && <div>🎯 Click the plot to predict any point</div>}
+                {!drawMode && predictPoint     && <div>🎯 Click the plot to predict any point</div>}
+                {drawMode                      && <div>✏️ Click to add · Right-click to remove points</div>}
                 {confusionMatrix               && <div>🟩 Confusion matrix shows per-class accuracy</div>}
-                {(activeTab === 'knn' || activeTab === 'naiveBayes' || activeTab === 'decisionTree' || activeTab === 'randomForest') && <div>🗺 Decision regions shown in background</div>}
-                {activeTab === 'kmeans'        && <div>⭐ Stars show centroids moving each step</div>}
-                {(activeTab === 'nn' || activeTab === 'dnn') && <div>🔥 Neural net heatmap + graph live</div>}
+                {rawProbFn                     && <div>📉 ROC curve shows classifier quality vs threshold</div>}
+                {activeTab === 'decisionTree'  && <div>🌳 Tree structure shows all decision splits</div>}
+                {activeTab === 'pca'           && <div>↗ Yellow arrow = PC1 · Purple arrow = PC2</div>}
                 <div className="border-t border-white/5 pt-1 mt-1">
-                  <span className="text-slate-600">⌨ </span>Space = train · ←/→ = guide · R = reset
+                  <span className="text-slate-600">⌨ </span>Space = train · ←/→ = guide · R = reset · D = draw
                 </div>
               </div>
             </div>
@@ -920,10 +1063,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Algorithm deep-dive explainer popup */}
-      {showExplainer && (
-        <AlgoExplainer algoId={activeTab} onClose={() => setShowExplainer(false)} />
-      )}
+      {showExplainer && <AlgoExplainer algoId={activeTab} onClose={() => setShowExplainer(false)} />}
     </main>
   );
 }

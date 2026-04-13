@@ -550,6 +550,70 @@ export const trainFFNN = async (data, params, config, onEpoch) => {
 };
 
 // ─────────────────────────────────────────────
+//  PCA (Principal Component Analysis, Pure JS)
+// ─────────────────────────────────────────────
+export const trainPCA = (data) => {
+  if (!data || data.length < 3) return null;
+
+  const n  = data.length;
+  const mx = data.reduce((s, d) => s + d.x, 0) / n;
+  const my = data.reduce((s, d) => s + d.y, 0) / n;
+
+  // Covariance matrix elements
+  const cxx = data.reduce((s, d) => s + (d.x - mx) ** 2, 0) / (n - 1);
+  const cyy = data.reduce((s, d) => s + (d.y - my) ** 2, 0) / (n - 1);
+  const cxy = data.reduce((s, d) => s + (d.x - mx) * (d.y - my), 0) / (n - 1);
+
+  // Analytical eigenvalues for 2×2 symmetric matrix
+  const tr   = cxx + cyy;
+  const det  = cxx * cyy - cxy * cxy;
+  const disc = Math.sqrt(Math.max(0, (tr * 0.5) ** 2 - det));
+  const lam1 = tr * 0.5 + disc;   // larger eigenvalue → PC1
+  const lam2 = tr * 0.5 - disc;   // smaller eigenvalue → PC2
+
+  // Eigenvector for PC1
+  let v1x, v1y;
+  if (Math.abs(cxy) > 1e-10) {
+    v1x = lam1 - cyy; v1y = cxy;
+  } else {
+    v1x = cxx >= cyy ? 1 : 0; v1y = cxx >= cyy ? 0 : 1;
+  }
+  const norm1 = Math.sqrt(v1x ** 2 + v1y ** 2) || 1;
+  v1x /= norm1; v1y /= norm1;
+  const v2x = -v1y, v2y = v1x; // PC2 is orthogonal
+
+  const totalVar     = lam1 + lam2 || 1;
+  const explainedV1  = lam1 / totalVar;
+  const explainedV2  = lam2 / totalVar;
+
+  // Project data onto PCs (for coloring)
+  const projections = data.map((d, i) => {
+    const cx = d.x - mx, cy = d.y - my;
+    return { ...d, idx: i, pc1: cx * v1x + cy * v1y, pc2: cx * v2x + cy * v2y };
+  });
+  const pc1vals = projections.map(p => p.pc1);
+  const pc1Min  = Math.min(...pc1vals);
+  const pc1Max  = Math.max(...pc1vals) || 1;
+
+  // Arrow lengths proportional to sqrt(eigenvalue)
+  const scale = 2.5;
+  const len1  = Math.sqrt(Math.max(lam1, 0)) * scale;
+  const len2  = Math.sqrt(Math.max(lam2, 0)) * scale;
+
+  return {
+    type:      'pca',
+    centroid:  { x: mx, y: my },
+    pc1:       { dx: v1x * len1, dy: v1y * len1, eigenvalue: lam1, explained: explainedV1 },
+    pc2:       { dx: v2x * len2, dy: v2y * len2, eigenvalue: lam2, explained: explainedV2 },
+    projections,
+    pc1Min, pc1Max,
+    explainedVar1: explainedV1,
+    explainedVar2: explainedV2,
+    accuracy: explainedV1,  // reuse liveMetrics.acc to show PC1 explained variance
+  };
+};
+
+// ─────────────────────────────────────────────
 //  EXPORT MODEL
 // ─────────────────────────────────────────────
 export const exportModel = async (model, name = 'intellilearn-model') => {
