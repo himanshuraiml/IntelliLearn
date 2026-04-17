@@ -177,6 +177,102 @@ model.compile({
   metrics: ['accuracy']
 });
 await model.fit(xs, ys, { epochs: ${p.epochs} });`,
+
+  cnn: (p) => `// 1-D CNN — TensorFlow.js
+// Input: sequences of shape [n, 16, 1]
+const model = tf.sequential();
+model.add(tf.layers.conv1d({
+  filters: 16, kernelSize: 3,
+  activation: 'relu', padding: 'same',
+  inputShape: [16, 1]
+}));
+model.add(tf.layers.maxPooling1d({ poolSize: 2 }));
+model.add(tf.layers.conv1d({ filters: 32, kernelSize: 3,
+  activation: 'relu', padding: 'same' }));
+model.add(tf.layers.globalMaxPooling1d());
+model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
+model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+model.compile({
+  optimizer: tf.train.adam(${p.learningRate}),
+  loss: 'binaryCrossentropy', metrics: ['accuracy']
+});
+await model.fit(xs, ys, { epochs: ${p.epochs} });`,
+
+  rnn: (p) => `// Simple RNN — TensorFlow.js
+// Input: sequences of shape [n, 16, 1]
+const model = tf.sequential();
+model.add(tf.layers.simpleRNN({
+  units: 32,
+  returnSequences: false,   // only use last hidden state
+  inputShape: [16, 1]
+}));
+// hₜ = tanh(Wₓ·xₜ + Wₕ·hₜ₋₁ + b)
+model.add(tf.layers.dense({ units: 16, activation: 'relu' }));
+model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+model.compile({
+  optimizer: tf.train.adam(${p.learningRate}),
+  loss: 'binaryCrossentropy', metrics: ['accuracy']
+});
+await model.fit(xs, ys, { epochs: ${p.epochs} });`,
+
+  lstm: (p) => `// LSTM — TensorFlow.js
+// Input: sequences of shape [n, 16, 1]
+const model = tf.sequential();
+model.add(tf.layers.lstm({
+  units: 32,
+  returnSequences: false,
+  inputShape: [16, 1]
+  // forget gate: fₜ = σ(Wf·[hₜ₋₁,xₜ] + bf)
+  // input gate:  iₜ = σ(Wi·[hₜ₋₁,xₜ] + bi)
+  // cell state:  Cₜ = fₜ⊙Cₜ₋₁ + iₜ⊙tanh(Wc·[hₜ₋₁,xₜ]+bc)
+  // output gate: hₜ = σ(Wo·[hₜ₋₁,xₜ]+bo) ⊙ tanh(Cₜ)
+}));
+model.add(tf.layers.dense({ units: 16, activation: 'relu' }));
+model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+model.compile({
+  optimizer: tf.train.adam(${p.learningRate}),
+  loss: 'binaryCrossentropy', metrics: ['accuracy']
+});
+await model.fit(xs, ys, { epochs: ${p.epochs} });`,
+
+  transformer: (p) => `// Transformer (Self-Attention) — TensorFlow.js
+// Attention(Q,K,V) = softmax(QKᵀ/√dₖ) · V
+const model = tf.sequential();
+// Linear embedding: [n, 16, 1] → [n, 16, 8]
+model.add(tf.layers.dense({ units: 8, inputShape: [16, 1] }));
+// Custom self-attention layer (d=8)
+model.add(new SelfAttentionLayer({ dModel: 8 }));
+// Aggregate all tokens
+model.add(tf.layers.globalAveragePooling1d());
+model.add(tf.layers.dense({ units: 16, activation: 'relu' }));
+model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+model.compile({
+  optimizer: tf.train.adam(${p.learningRate}),
+  loss: 'binaryCrossentropy', metrics: ['accuracy']
+});
+await model.fit(xs, ys, { epochs: ${p.epochs} });`,
+
+  pca: () => `// PCA (Principal Component Analysis) — Pure JS
+// Finds directions of maximum variance (eigenvectors)
+const n = data.length;
+const mx = data.reduce((s,d) => s+d.x, 0) / n;
+const my = data.reduce((s,d) => s+d.y, 0) / n;
+
+// Covariance matrix elements
+const cxx = data.reduce((s,d) => s+(d.x-mx)**2, 0) / (n-1);
+const cyy = data.reduce((s,d) => s+(d.y-my)**2, 0) / (n-1);
+const cxy = data.reduce((s,d) => s+(d.x-mx)*(d.y-my), 0)/(n-1);
+
+// Eigenvalues (analytical for 2×2)
+const tr   = cxx + cyy;
+const disc = Math.sqrt((tr/2)**2 - (cxx*cyy - cxy**2));
+const λ1   = tr/2 + disc;   // PC1 eigenvalue
+const λ2   = tr/2 - disc;   // PC2 eigenvalue
+
+// PC1 eigenvector
+const v1 = normalize([λ1 - cyy, cxy]);
+// Explained variance ratio
+const ev1 = λ1 / (λ1 + λ2);  // PC1 explains ev1 * 100%`,
 };
 
 // ── Python / scikit-learn / Keras snippets ───────────────────────────────────
@@ -382,6 +478,123 @@ model.compile(
 )
 history = model.fit(X, y, epochs=${p.epochs}, verbose=0)
 print(f"Final accuracy: {history.history['accuracy'][-1]:.2%}")`,
+
+  cnn: (p) => `# TensorFlow / Keras — 1-D CNN
+# X shape: (n_samples, seq_len, 1) e.g. (100, 16, 1)
+from tensorflow import keras
+from tensorflow.keras import layers
+
+model = keras.Sequential([
+    layers.Conv1D(filters=16, kernel_size=3,
+                  activation='relu', padding='same',
+                  input_shape=(16, 1)),
+    layers.MaxPooling1D(pool_size=2),
+    layers.Conv1D(filters=32, kernel_size=3,
+                  activation='relu', padding='same'),
+    layers.GlobalMaxPooling1D(),
+    layers.Dense(32, activation='relu'),
+    layers.Dense(1, activation='sigmoid')
+])
+model.compile(optimizer=keras.optimizers.Adam(${p.learningRate}),
+              loss='binary_crossentropy', metrics=['accuracy'])
+history = model.fit(X, y, epochs=${p.epochs}, verbose=0)
+print(f"Accuracy: {history.history['accuracy'][-1]:.2%}")`,
+
+  rnn: (p) => `# TensorFlow / Keras — Simple RNN
+# X shape: (n_samples, seq_len, 1) e.g. (100, 16, 1)
+from tensorflow import keras
+from tensorflow.keras import layers
+
+model = keras.Sequential([
+    # hₜ = tanh(Wₓ·xₜ + Wₕ·hₜ₋₁ + b)
+    layers.SimpleRNN(units=32,
+                     return_sequences=False,
+                     input_shape=(16, 1)),
+    layers.Dense(16, activation='relu'),
+    layers.Dense(1, activation='sigmoid')
+])
+model.compile(optimizer=keras.optimizers.Adam(${p.learningRate}),
+              loss='binary_crossentropy', metrics=['accuracy'])
+history = model.fit(X, y, epochs=${p.epochs}, verbose=0)
+print(f"Accuracy: {history.history['accuracy'][-1]:.2%}")`,
+
+  lstm: (p) => `# TensorFlow / Keras — LSTM
+# X shape: (n_samples, seq_len, 1) e.g. (100, 16, 1)
+from tensorflow import keras
+from tensorflow.keras import layers
+
+model = keras.Sequential([
+    # Forget gate: fₜ = σ(Wf·[hₜ₋₁,xₜ] + bf)
+    # Input gate:  iₜ = σ(Wi·[hₜ₋₁,xₜ] + bi)
+    # Cell state:  Cₜ = fₜ⊙Cₜ₋₁ + iₜ⊙tanh(...)
+    # Output gate: hₜ = oₜ⊙tanh(Cₜ)
+    layers.LSTM(units=32,
+                return_sequences=False,
+                input_shape=(16, 1)),
+    layers.Dense(16, activation='relu'),
+    layers.Dense(1, activation='sigmoid')
+])
+model.compile(optimizer=keras.optimizers.Adam(${p.learningRate}),
+              loss='binary_crossentropy', metrics=['accuracy'])
+history = model.fit(X, y, epochs=${p.epochs}, verbose=0)
+print(f"Accuracy: {history.history['accuracy'][-1]:.2%}")`,
+
+  transformer: (p) => `# TensorFlow / Keras — Transformer (Self-Attention)
+# X shape: (n_samples, seq_len, 1) e.g. (100, 16, 1)
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+# Attention(Q,K,V) = softmax(QKᵀ / √dₖ) · V
+class SelfAttention(layers.Layer):
+    def __init__(self, d_model=8):
+        super().__init__()
+        self.Wq = layers.Dense(d_model, use_bias=False)
+        self.Wk = layers.Dense(d_model, use_bias=False)
+        self.Wv = layers.Dense(d_model, use_bias=False)
+        self.scale = d_model ** 0.5
+    def call(self, x):
+        Q, K, V = self.Wq(x), self.Wk(x), self.Wv(x)
+        scores = tf.matmul(Q, K, transpose_b=True) / self.scale
+        weights = tf.nn.softmax(scores, axis=-1)
+        return tf.matmul(weights, V)
+
+inp = keras.Input(shape=(16, 1))
+x   = layers.Dense(8)(inp)          # embed to d_model=8
+x   = SelfAttention(d_model=8)(x)
+x   = layers.GlobalAveragePooling1D()(x)
+x   = layers.Dense(16, activation='relu')(x)
+out = layers.Dense(1, activation='sigmoid')(x)
+model = keras.Model(inp, out)
+model.compile(optimizer=keras.optimizers.Adam(${p.learningRate}),
+              loss='binary_crossentropy', metrics=['accuracy'])
+history = model.fit(X, y, epochs=${p.epochs}, verbose=0)
+print(f"Accuracy: {history.history['accuracy'][-1]:.2%}")`,
+
+  pca: () => `# scikit-learn — PCA (Principal Component Analysis)
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+
+# Always standardize features before PCA
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)  # X shape: (n, p)
+
+# Fit PCA — find directions of maximum variance
+pca = PCA(n_components=2)
+pca.fit(X_scaled)
+
+# Explained variance ratio per component
+print("Explained variance:", pca.explained_variance_ratio_)
+print(f"PC1: {pca.explained_variance_ratio_[0]:.1%}")
+print(f"PC2: {pca.explained_variance_ratio_[1]:.1%}")
+
+# Project data onto principal components
+X_pca = pca.transform(X_scaled)  # shape: (n, 2)
+
+# Principal component directions (eigenvectors)
+print("PC1 direction:", pca.components_[0])
+print("PC2 direction:", pca.components_[1])`,
 };
 
 const LANG_LABELS = { js: 'JavaScript', py: 'Python' };

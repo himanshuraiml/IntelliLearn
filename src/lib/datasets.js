@@ -117,6 +117,92 @@ export const generateClusteringData5 = (count = 100, noiseLevel = 1) => {
   return data;
 };
 
+// ─── Sequence Datasets (for CNN / RNN / LSTM / Transformer) ──────────────────
+// Each sample: { seq: number[SEQ_LEN], label: 0|1 }
+// SEQ_LEN = 16 timesteps, values normalised to ~[0, 1]
+
+export const SEQ_LEN = 16;
+
+/** Trend: rising (label=1) vs falling (label=0) sequences */
+export const generateTrendData = (count = 60, noiseLevel = 1) => {
+  const noise = noiseLevel * 0.12;
+  const data = [];
+  for (let i = 0; i < count / 2; i++) {
+    // Rising
+    data.push({
+      seq: Array.from({ length: SEQ_LEN }, (_, t) =>
+        Math.max(0, Math.min(1, t / (SEQ_LEN - 1) + (Math.random() - 0.5) * noise))
+      ),
+      label: 1,
+    });
+    // Falling
+    data.push({
+      seq: Array.from({ length: SEQ_LEN }, (_, t) =>
+        Math.max(0, Math.min(1, 1 - t / (SEQ_LEN - 1) + (Math.random() - 0.5) * noise))
+      ),
+      label: 0,
+    });
+  }
+  return data;
+};
+
+/** Waveform: sine-wave pattern (label=1) vs flat noise (label=0) */
+export const generateWaveformData = (count = 60, noiseLevel = 1) => {
+  const noise = noiseLevel * 0.1;
+  const data = [];
+  for (let i = 0; i < count / 2; i++) {
+    const freq  = 1 + Math.random();          // 1–2 full cycles
+    const phase = Math.random() * Math.PI * 2;
+    data.push({
+      seq: Array.from({ length: SEQ_LEN }, (_, t) =>
+        Math.max(0, Math.min(1,
+          0.5 + 0.45 * Math.sin(2 * Math.PI * freq * t / SEQ_LEN + phase)
+          + (Math.random() - 0.5) * noise
+        ))
+      ),
+      label: 1,
+    });
+    // Flat random noise
+    data.push({
+      seq: Array.from({ length: SEQ_LEN }, () =>
+        Math.max(0, Math.min(1, 0.5 + (Math.random() - 0.5) * (0.5 + noiseLevel * 0.2)))
+      ),
+      label: 0,
+    });
+  }
+  return data;
+};
+
+/** Step-change: abrupt jump in first half (label=0) vs second half (label=1) */
+export const generateStepData = (count = 60, noiseLevel = 1) => {
+  const noise = noiseLevel * 0.08;
+  const data = [];
+  const half = SEQ_LEN / 2;
+  for (let i = 0; i < count / 2; i++) {
+    // Step in first half (t ≤ ~4)
+    const step0 = 1 + Math.floor(Math.random() * (half - 2));
+    data.push({
+      seq: Array.from({ length: SEQ_LEN }, (_, t) =>
+        Math.max(0, Math.min(1,
+          (t < step0 ? 0.2 : 0.8) + (Math.random() - 0.5) * noise
+        ))
+      ),
+      label: 0,
+    });
+    // Step in second half (t ≥ ~9)
+    const step1 = half + 1 + Math.floor(Math.random() * (half - 2));
+    data.push({
+      seq: Array.from({ length: SEQ_LEN }, (_, t) =>
+        Math.max(0, Math.min(1,
+          (t < step1 ? 0.2 : 0.8) + (Math.random() - 0.5) * noise
+        ))
+      ),
+      label: 1,
+    });
+  }
+  return data;
+};
+
 /** Uniform blob for PCA */
 export const generatePCAData = (count = 80, noiseLevel = 1) => {
   const data = [];

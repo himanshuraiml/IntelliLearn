@@ -498,6 +498,72 @@ export const trainSVM = async (data, params, onEpoch) => {
 };
 
 // ─────────────────────────────────────────────
+//  BACKPROPAGATION (explicit 3-layer MLP + gradient norms)
+// ─────────────────────────────────────────────
+export const trainBackprop = async (data, params, onEpoch) => {
+  const { learningRate = 0.05, epochs = 150, validationSplit = 0.2 } = params;
+
+  const allXs = tf.tensor2d(data.map(d => [d.x, d.y]));
+  const allYs = tf.tensor2d(data.map(d => [d.label]));
+
+  // Architecture: 2 → 8 (relu) → 4 (relu) → 1 (sigmoid)
+  const model = tf.sequential();
+  model.add(tf.layers.dense({ units: 8, activation: 'relu', inputShape: [2] }));
+  model.add(tf.layers.dense({ units: 4, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+  // Use vanilla SGD so the "raw" gradient descent is visible
+  model.compile({ optimizer: tf.train.sgd(learningRate), loss: 'binaryCrossentropy', metrics: ['accuracy'] });
+
+  await model.fit(allXs, allYs, {
+    epochs,
+    validationSplit,
+    callbacks: {
+      onEpochEnd: async (epoch, logs) => {
+        if (onEpoch) {
+          // ── Gradient norms per layer (W only, skip bias) ──────────────
+          let gradNorms = [];
+          try {
+            const { grads } = tf.variableGrads(() => {
+              const pred = model.predict(allXs);
+              return tf.losses.logLoss(allYs, pred).mean();
+            });
+            model.layers.forEach((layer, li) => {
+              const kv = layer.trainableWeights.find(v => v.name.includes('kernel'));
+              if (kv && grads[kv.name]) {
+                gradNorms.push({ layer: `Layer ${li + 1}`, norm: grads[kv.name].norm().dataSync()[0] });
+              }
+            });
+            Object.values(grads).forEach(g => { try { g.dispose(); } catch (_) {} });
+          } catch (_) { gradNorms = []; }
+
+          // ── Decision boundary surface ──────────────────────────────────
+          const resolution = 25;
+          const xVals = data.map(d => d.x), yVals = data.map(d => d.y);
+          const xMin = Math.min(...xVals) - 1, xMax = Math.max(...xVals) + 1;
+          const yMin = Math.min(...yVals) - 1, yMax = Math.max(...yVals) + 1;
+          const testPoints = [];
+          for (let i = 0; i <= resolution; i++)
+            for (let j = 0; j <= resolution; j++)
+              testPoints.push([xMin + (i / resolution) * (xMax - xMin), yMin + (j / resolution) * (yMax - yMin)]);
+          const testTensor = tf.tensor2d(testPoints);
+          const preds = model.predict(testTensor).dataSync();
+          tf.dispose(testTensor);
+          const cells = testPoints.map(([x, y], idx) => ({ x, y, prob: preds[idx] }));
+          const weights = model.layers.map(layer => layer.getWeights()[0]?.arraySync() || []);
+
+          await onEpoch(epoch, { ...logs, weights, cells, xMin, xMax, yMin, yMax, type: 'backprop', gradNorms });
+        }
+        await tf.nextFrame();
+      }
+    }
+  });
+
+  const weights = model.layers.map(layer => layer.getWeights()[0]?.arraySync() || []);
+  tf.dispose([allXs, allYs]);
+  return { model, weights, type: 'backprop' };
+};
+
+// ─────────────────────────────────────────────
 //  FEEDFORWARD NEURAL NETWORK (MLP)
 // ─────────────────────────────────────────────
 export const trainFFNN = async (data, params, config, onEpoch) => {
@@ -611,6 +677,193 @@ export const trainPCA = (data) => {
     explainedVar2: explainedV2,
     accuracy: explainedV1,  // reuse liveMetrics.acc to show PC1 explained variance
   };
+};
+
+// ─────────────────────────────────────────────
+//  HELPER: Predict all sequences and compute accuracy
+// ─────────────────────────────────────────────
+async function predictSequences(model, data) {
+  const seqLen = data[0].seq.length;
+  const xs = tf.tensor3d(data.map(d => d.seq.map(v => [v]))); // [n, seqLen, 1]
+  const probs = model.predict(xs).dataSync();
+  tf.dispose(xs);
+  const predictions = Array.from(probs).map((prob, i) => ({
+    prob,
+    label: prob >= 0.5 ? 1 : 0,
+    correct: (prob >= 0.5 ? 1 : 0) === data[i].label,
+  }));
+  const accuracy = predictions.filter(p => p.correct).length / predictions.length;
+  return { predictions, accuracy };
+}
+
+// ─────────────────────────────────────────────
+//  CNN (1-D Convolutional Neural Network)
+// ─────────────────────────────────────────────
+export const trainCNN = async (data, params, onEpoch) => {
+  const { learningRate = 0.01, epochs = 100, validationSplit = 0.2 } = params;
+  const seqLen = data[0]?.seq?.length || 16;
+
+  // [n, seqLen, 1]
+  const xs = tf.tensor3d(data.map(d => d.seq.map(v => [v])));
+  const ys = tf.tensor2d(data.map(d => [d.label]));
+
+  const model = tf.sequential();
+  model.add(tf.layers.conv1d({ filters: 16, kernelSize: 3, activation: 'relu', padding: 'same', inputShape: [seqLen, 1] }));
+  model.add(tf.layers.maxPooling1d({ poolSize: 2 }));
+  model.add(tf.layers.conv1d({ filters: 32, kernelSize: 3, activation: 'relu', padding: 'same' }));
+  model.add(tf.layers.globalMaxPooling1d());
+  model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+  model.compile({ optimizer: tf.train.adam(learningRate), loss: 'binaryCrossentropy', metrics: ['accuracy'] });
+
+  await model.fit(xs, ys, {
+    epochs,
+    validationSplit,
+    callbacks: {
+      onEpochEnd: async (epoch, logs) => {
+        if (onEpoch) await onEpoch(epoch, { ...logs, type: 'cnn' });
+        await tf.nextFrame();
+      }
+    }
+  });
+
+  const { predictions, accuracy } = await predictSequences(model, data);
+  tf.dispose([xs, ys]);
+  return { model, type: 'cnn', seqLen, predictions, accuracy };
+};
+
+// ─────────────────────────────────────────────
+//  RNN (Simple Recurrent Neural Network)
+// ─────────────────────────────────────────────
+export const trainRNN = async (data, params, onEpoch) => {
+  const { learningRate = 0.01, epochs = 100, validationSplit = 0.2 } = params;
+  const seqLen = data[0]?.seq?.length || 16;
+
+  const xs = tf.tensor3d(data.map(d => d.seq.map(v => [v])));
+  const ys = tf.tensor2d(data.map(d => [d.label]));
+
+  const model = tf.sequential();
+  model.add(tf.layers.simpleRNN({ units: 32, returnSequences: false, inputShape: [seqLen, 1] }));
+  model.add(tf.layers.dense({ units: 16, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+  model.compile({ optimizer: tf.train.adam(learningRate), loss: 'binaryCrossentropy', metrics: ['accuracy'] });
+
+  await model.fit(xs, ys, {
+    epochs,
+    validationSplit,
+    callbacks: {
+      onEpochEnd: async (epoch, logs) => {
+        if (onEpoch) await onEpoch(epoch, { ...logs, type: 'rnn' });
+        await tf.nextFrame();
+      }
+    }
+  });
+
+  const { predictions, accuracy } = await predictSequences(model, data);
+  tf.dispose([xs, ys]);
+  return { model, type: 'rnn', seqLen, predictions, accuracy };
+};
+
+// ─────────────────────────────────────────────
+//  LSTM (Long Short-Term Memory)
+// ─────────────────────────────────────────────
+export const trainLSTM = async (data, params, onEpoch) => {
+  const { learningRate = 0.01, epochs = 100, validationSplit = 0.2 } = params;
+  const seqLen = data[0]?.seq?.length || 16;
+
+  const xs = tf.tensor3d(data.map(d => d.seq.map(v => [v])));
+  const ys = tf.tensor2d(data.map(d => [d.label]));
+
+  const model = tf.sequential();
+  model.add(tf.layers.lstm({ units: 32, returnSequences: false, inputShape: [seqLen, 1] }));
+  model.add(tf.layers.dense({ units: 16, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+  model.compile({ optimizer: tf.train.adam(learningRate), loss: 'binaryCrossentropy', metrics: ['accuracy'] });
+
+  await model.fit(xs, ys, {
+    epochs,
+    validationSplit,
+    callbacks: {
+      onEpochEnd: async (epoch, logs) => {
+        if (onEpoch) await onEpoch(epoch, { ...logs, type: 'lstm' });
+        await tf.nextFrame();
+      }
+    }
+  });
+
+  const { predictions, accuracy } = await predictSequences(model, data);
+  tf.dispose([xs, ys]);
+  return { model, type: 'lstm', seqLen, predictions, accuracy };
+};
+
+// ─────────────────────────────────────────────
+//  TRANSFORMER (Scaled Dot-Product Self-Attention)
+// ─────────────────────────────────────────────
+class SelfAttentionLayer extends tf.layers.Layer {
+  constructor(config) {
+    super({ name: 'selfAttention', ...config });
+    this.dModel = (config && config.dModel) || 8;
+  }
+  build(inputShape) {
+    const inDim = inputShape[inputShape.length - 1];
+    const d = this.dModel;
+    const init = tf.initializers.glorotNormal({});
+    this.Wq = this.addWeight('Wq', [inDim, d], 'float32', init);
+    this.Wk = this.addWeight('Wk', [inDim, d], 'float32', init);
+    this.Wv = this.addWeight('Wv', [inDim, d], 'float32', init);
+    this.built = true;
+  }
+  call(inputs) {
+    const inp = Array.isArray(inputs) ? inputs[0] : inputs;
+    const q = tf.matMul(inp, this.Wq.read());          // [B, T, d]
+    const k = tf.matMul(inp, this.Wk.read());
+    const v = tf.matMul(inp, this.Wv.read());
+    const scale = tf.scalar(Math.sqrt(this.dModel));
+    const scores = tf.matMul(q, k, false, true).div(scale); // [B, T, T]
+    const weights = tf.softmax(scores, -1);
+    return tf.matMul(weights, v);                      // [B, T, d]
+  }
+  computeOutputShape(inputShape) {
+    return [...inputShape.slice(0, -1), this.dModel];
+  }
+  getConfig() { return { ...super.getConfig(), dModel: this.dModel }; }
+  static get className() { return 'SelfAttentionLayer'; }
+}
+tf.serialization.registerClass(SelfAttentionLayer);
+
+export const trainTransformer = async (data, params, onEpoch) => {
+  const { learningRate = 0.01, epochs = 100, validationSplit = 0.2 } = params;
+  const seqLen = data[0]?.seq?.length || 16;
+
+  const xs = tf.tensor3d(data.map(d => d.seq.map(v => [v]))); // [n, seqLen, 1]
+  const ys = tf.tensor2d(data.map(d => [d.label]));
+
+  const model = tf.sequential();
+  // Project 1 input feature → 8-dim embedding for each token
+  model.add(tf.layers.dense({ units: 8, inputShape: [seqLen, 1] }));  // [B, seqLen, 8]
+  // Self-attention over all tokens
+  model.add(new SelfAttentionLayer({ dModel: 8 }));                    // [B, seqLen, 8]
+  // Aggregate tokens → fixed-size vector
+  model.add(tf.layers.globalAveragePooling1d());                       // [B, 8]
+  // Feed-forward head
+  model.add(tf.layers.dense({ units: 16, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+  model.compile({ optimizer: tf.train.adam(learningRate), loss: 'binaryCrossentropy', metrics: ['accuracy'] });
+
+  await model.fit(xs, ys, {
+    epochs,
+    validationSplit,
+    callbacks: {
+      onEpochEnd: async (epoch, logs) => {
+        if (onEpoch) await onEpoch(epoch, { ...logs, type: 'transformer' });
+        await tf.nextFrame();
+      }
+    }
+  });
+
+  const { predictions, accuracy } = await predictSequences(model, data);
+  tf.dispose([xs, ys]);
+  return { model, type: 'transformer', seqLen, predictions, accuracy };
 };
 
 // ─────────────────────────────────────────────

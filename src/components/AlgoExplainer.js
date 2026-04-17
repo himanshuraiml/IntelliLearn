@@ -73,6 +73,30 @@ const FORMULAS = {
     <span>Overfitting → Dropout + L2 weight decay</span>,
     <span>Slow convergence → Adam / RMSProp + Batch Normalisation</span>,
   ],
+  rnn: [
+    <span>h<Sub c="t" /> = tanh( W<Sub c="x" /> x<Sub c="t" /> + W<Sub c="h" /> h<Sub c="t−1" /> + b )</span>,
+    <span>ŷ<Sub c="t" /> = softmax( W<Sub c="y" /> h<Sub c="t" /> + b<Sub c="y" /> )</span>,
+    <span>∂L / ∂W = Σ<Sub c="t" /> ∂L<Sub c="t" /> / ∂W  (BPTT — BackProp Through Time)</span>,
+  ],
+  lstm: [
+    <span>f<Sub c="t" /> = σ( W<Sub c="f" /> [h<Sub c="t−1" />, x<Sub c="t" />] + b<Sub c="f" /> )  — forget gate</span>,
+    <span>i<Sub c="t" /> = σ( W<Sub c="i" /> [h<Sub c="t−1" />, x<Sub c="t" />] + b<Sub c="i" /> )  — input gate</span>,
+    <span>C<Sub c="t" /> = f<Sub c="t" /> ⊙ C<Sub c="t−1" /> + i<Sub c="t" /> ⊙ tanh( W<Sub c="C" /> [h<Sub c="t−1" />, x<Sub c="t" />] + b<Sub c="C" /> )</span>,
+    <span>o<Sub c="t" /> = σ( W<Sub c="o" /> [h<Sub c="t−1" />, x<Sub c="t" />] + b<Sub c="o" /> )  — output gate</span>,
+    <span>h<Sub c="t" /> = o<Sub c="t" /> ⊙ tanh( C<Sub c="t" /> )</span>,
+  ],
+  pca: [
+    <span>C = (1/(n−1)) X<Sup c="T" />X  — covariance matrix</span>,
+    <span>C v<Sub c="i" /> = λ<Sub c="i" /> v<Sub c="i" />  — eigendecomposition</span>,
+    <span>Explained variance of PC<Sub c="i" /> = λ<Sub c="i" /> / Σ<Sub c="j" /> λ<Sub c="j" /></span>,
+    <span>X<Sub c="reduced" /> = X · [v<Sub c="1" /> | v<Sub c="2" /> | … | v<Sub c="k" />]</span>,
+  ],
+  transformer: [
+    <span>Q = XW<Sub c="Q" />,  K = XW<Sub c="K" />,  V = XW<Sub c="V" /></span>,
+    <span>Attention(Q, K, V) = softmax( QK<Sup c="T" /> / √d<Sub c="k" /> ) · V</span>,
+    <span>MultiHead = Concat(head<Sub c="1" />, …, head<Sub c="h" />) W<Sup c="O" /></span>,
+    <span>FFN(x) = max(0, xW<Sub c="1" /> + b<Sub c="1" />) W<Sub c="2" /> + b<Sub c="2" /></span>,
+  ],
 };
 
 // ─── Blog-style text content ───────────────────────────────────────────────────
@@ -665,6 +689,227 @@ The network is trained end-to-end using backpropagation: gradients of the loss a
           'Speech recognition — RNNs and Transformers transcribe audio.',
           'Natural language processing — ChatGPT, BERT, and all LLMs.',
           'Drug discovery — predicting protein folding (AlphaFold).',
+        ],
+      },
+    ],
+  },
+
+  rnn: {
+    title: 'Recurrent Neural Network (RNN)',
+    subtitle: 'A hidden state that carries memory from one timestep to the next',
+    color: 'from-amber-500 to-orange-500',
+    sections: [
+      {
+        heading: 'What is it?',
+        body: `A Recurrent Neural Network (RNN) is designed for sequential data — time series, text, audio, and any data where the order of inputs matters. Unlike a feedforward MLP which processes inputs independently, an RNN maintains a hidden state hₜ that is updated at every timestep and carries information from earlier steps.
+
+At each timestep t, the network receives the current input xₜ and the previous hidden state hₜ₋₁, combines them, and produces a new hidden state hₜ. This creates a "memory" of past inputs that influences future predictions.`,
+      },
+      {
+        heading: 'How Training Works',
+        steps: [
+          'Feed the sequence one timestep at a time: x₁, x₂, …, xT.',
+          'At each step t: hₜ = tanh(Wₓ·xₜ + Wₕ·hₜ₋₁ + b).',
+          'Optionally produce an output ŷₜ = softmax(Wᵧ·hₜ + bᵧ) at each step.',
+          'Compute the loss (e.g., cross-entropy summed over all timesteps).',
+          'Backpropagate through time (BPTT): unroll the network and apply the chain rule backward through every timestep.',
+          'Update weights Wₓ, Wₕ, Wᵧ with gradient descent.',
+        ],
+      },
+      { heading: 'Key Formulas', formulaKey: 'rnn' },
+      {
+        heading: 'The Vanishing Gradient Problem',
+        body: `The critical weakness of vanilla RNNs is vanishing gradients. During BPTT, gradients are multiplied by Wₕ at every step. If ‖Wₕ‖ < 1, gradients shrink exponentially as they travel back in time — the network "forgets" distant past inputs. This makes RNNs struggle with long-range dependencies (e.g., connecting a subject to its verb 50 words later). LSTM and GRU were designed specifically to fix this.`,
+      },
+      {
+        heading: 'Pros & Cons',
+        pros: [
+          'Natural fit for sequential and temporal data.',
+          'Shares weights across timesteps — efficient parameter use.',
+          'Can handle variable-length sequences.',
+          'Foundation for more advanced architectures (LSTM, GRU, Transformer).',
+        ],
+        cons: [
+          'Suffers from vanishing/exploding gradients on long sequences.',
+          'Slow to train — cannot be parallelized across timesteps.',
+          'Limited practical memory — rarely retains information beyond ~10–20 steps.',
+          'Largely replaced by LSTMs and Transformers in practice.',
+        ],
+      },
+      {
+        heading: 'Real-World Applications',
+        bullets: [
+          'Time-series forecasting — stock prices, sensor readings.',
+          'Speech recognition — early systems before Transformer dominance.',
+          'Character-level language models.',
+          'Sequence labeling — POS tagging, named entity recognition.',
+        ],
+      },
+    ],
+  },
+
+  lstm: {
+    title: 'Long Short-Term Memory (LSTM)',
+    subtitle: 'Gating mechanisms that selectively remember and forget over long sequences',
+    color: 'from-violet-500 to-purple-600',
+    sections: [
+      {
+        heading: 'What is it?',
+        body: `LSTM (Long Short-Term Memory), introduced by Hochreiter & Schmidhuber in 1997, solves the vanishing gradient problem of vanilla RNNs by adding a separate cell state Cₜ — a "memory highway" that flows through time with only multiplicative interactions (no squashing). Three learned gates control what information is written, erased, and read from this cell state.
+
+This gating mechanism lets LSTMs selectively remember information for hundreds of timesteps and selectively forget irrelevant information — something vanilla RNNs cannot do reliably.`,
+      },
+      {
+        heading: 'The Three Gates',
+        steps: [
+          'Forget gate fₜ: decides what fraction of the old cell state Cₜ₋₁ to erase. fₜ = σ(Wf·[hₜ₋₁, xₜ] + bf). Output ∈ (0,1) — 0 means "forget everything", 1 means "keep everything".',
+          'Input gate iₜ: decides what new information to write into the cell state. iₜ = σ(Wᵢ·[hₜ₋₁, xₜ] + bᵢ). A candidate vector C̃ₜ = tanh(Wc·[hₜ₋₁, xₜ] + bc) provides the new content.',
+          'Cell state update: Cₜ = fₜ ⊙ Cₜ₋₁ + iₜ ⊙ C̃ₜ. The ⊙ (Hadamard product) applies gates element-wise.',
+          'Output gate oₜ: decides how much of the cell state to expose as the hidden state. oₜ = σ(Wo·[hₜ₋₁, xₜ] + bo). Then hₜ = oₜ ⊙ tanh(Cₜ).',
+        ],
+      },
+      { heading: 'Key Formulas', formulaKey: 'lstm' },
+      {
+        heading: 'Why Gradients Flow Better',
+        body: `The cell state update Cₜ = fₜ ⊙ Cₜ₋₁ + iₜ ⊙ C̃ₜ is additive — it adds new content rather than multiplying through a weight matrix at every step. Gradients flowing back through this additive path don't vanish or explode as easily, because ∂Cₜ/∂Cₜ₋₁ ≈ fₜ (a learned gate value near 1 for important memories). This is the core insight behind LSTM's success on long sequences.`,
+      },
+      {
+        heading: 'Pros & Cons',
+        pros: [
+          'Effectively learns long-range dependencies (hundreds of timesteps).',
+          'Gating makes it robust to vanishing gradients.',
+          'State of the art for many sequential tasks before Transformers.',
+          'Works well on time series, NLP, and audio with moderate sequence lengths.',
+        ],
+        cons: [
+          'Much slower to train than feedforward networks — hard to parallelize.',
+          'More parameters than vanilla RNN (4× the weight matrices).',
+          'For very long sequences (1000+), Transformers are now preferred.',
+          'Harder to interpret than simpler models.',
+        ],
+      },
+      {
+        heading: 'Real-World Applications',
+        bullets: [
+          'Machine translation — was the dominant architecture before Transformers.',
+          'Speech synthesis (text-to-speech) systems.',
+          'Handwriting recognition and generation.',
+          'Anomaly detection in time-series sensor data.',
+        ],
+      },
+    ],
+  },
+
+  pca: {
+    title: 'Principal Component Analysis (PCA)',
+    subtitle: 'Find the directions of maximum variance and project data onto fewer dimensions',
+    color: 'from-amber-400 to-yellow-500',
+    sections: [
+      {
+        heading: 'What is it?',
+        body: `PCA is an unsupervised dimensionality reduction technique. Given a dataset with p features, PCA finds a new coordinate system — the principal components (PCs) — aligned with the directions of greatest variance in the data. By projecting onto the top k PCs, you can compress p dimensions down to k while retaining as much information as possible.
+
+PCA is purely a linear transformation. It does not use labels and does not optimize a loss function — it is solved analytically via eigendecomposition of the covariance matrix.`,
+      },
+      {
+        heading: 'How It Works',
+        steps: [
+          'Center the data: subtract the mean of each feature so the data is zero-centered.',
+          'Compute the covariance matrix: C = (1/(n−1)) XᵀX, a p×p symmetric matrix.',
+          'Eigendecompose C: find eigenvalues λ₁ ≥ λ₂ ≥ … ≥ λₚ and their eigenvectors v₁, v₂, …, vₚ.',
+          'Each eigenvector vᵢ is a principal component direction. λᵢ tells you the variance explained by that component.',
+          'Select the top k eigenvectors (those with the largest eigenvalues).',
+          'Project the data: X_reduced = X · [v₁ | v₂ | … | vₖ]. Each row is now a k-dimensional vector.',
+        ],
+      },
+      {
+        heading: 'Key Formula',
+        formulaKey: 'pca',
+      },
+      {
+        heading: 'Explained Variance',
+        body: `The fraction of total variance explained by PC i is λᵢ / Σⱼλⱼ. In this playground, PC1 (yellow arrow) captures the primary direction of spread and PC2 (purple arrow) is orthogonal to it. The arrow lengths are proportional to √λ — longer = more variance. The explained variance bar shows exactly how much information each component carries.`,
+      },
+      {
+        heading: 'Pros & Cons',
+        pros: [
+          'Reduces dimensionality while maximizing retained variance.',
+          'Removes correlated features — principal components are always orthogonal.',
+          'Speeds up downstream ML models by reducing input size.',
+          'Useful for visualization — project any dataset to 2D or 3D.',
+        ],
+        cons: [
+          'Only captures linear relationships — misses non-linear structure (use t-SNE or UMAP instead).',
+          'Principal components are hard to interpret — they are mixtures of original features.',
+          'Sensitive to feature scaling — always standardize before applying PCA.',
+          'Discards low-variance directions that might still be discriminative for classification.',
+        ],
+      },
+      {
+        heading: 'When to Use',
+        body: `Use PCA as a preprocessing step when you have many correlated features (e.g., pixel values, sensor readings, gene expressions). It is especially useful before applying algorithms that struggle with high dimensionality (KNN, SVM). For visualization purposes, projecting to 2 PCs gives the best possible 2D view of the data's variance structure.`,
+      },
+      {
+        heading: 'Real-World Applications',
+        bullets: [
+          'Face recognition — eigenfaces compress face images to their principal components.',
+          'Finance — factor analysis of correlated stock returns.',
+          'Genomics — visualizing population structure from thousands of SNPs.',
+          'Image compression — retaining the top k components to reconstruct images with less storage.',
+        ],
+      },
+    ],
+  },
+
+  transformer: {
+    title: 'Transformer',
+    subtitle: 'Self-attention allows every token to directly attend to every other token',
+    color: 'from-yellow-400 to-orange-500',
+    sections: [
+      {
+        heading: 'What is it?',
+        body: `The Transformer, introduced in "Attention Is All You Need" (Vaswani et al., 2017), completely abandons recurrence and convolution in favor of self-attention. Instead of processing tokens one by one (like RNNs), it processes the entire sequence in parallel and computes a weighted combination of all tokens for each position simultaneously.
+
+This parallelism made Transformers dramatically faster to train on modern GPUs, and the self-attention mechanism proved far more powerful at capturing long-range dependencies. Every modern LLM (GPT, Claude, Gemini, LLaMA) is built on the Transformer architecture.`,
+      },
+      {
+        heading: 'How Self-Attention Works',
+        steps: [
+          'Each token embedding x is projected into three vectors: Query Q = xWQ, Key K = xWK, Value V = xWV.',
+          'For each token, compute a score against every other token: score(i,j) = Qᵢ · Kⱼ / √dₖ. The √dₖ scaling prevents large dot products from pushing softmax into tiny-gradient regions.',
+          'Apply softmax to get attention weights: αᵢⱼ = exp(scoreᵢⱼ) / Σⱼ exp(scoreᵢⱼ). These sum to 1 — they form a distribution over all tokens.',
+          'Compute the output as a weighted sum of Values: zᵢ = Σⱼ αᵢⱼ Vⱼ.',
+          'Multi-Head Attention runs h independent attention heads in parallel, concatenates their outputs, and projects back: MultiHead(Q,K,V) = Concat(head₁,…,headₕ)W°.',
+          'Each Transformer block adds a position-wise Feed-Forward Network (FFN) after attention, followed by Layer Normalization and residual connections.',
+        ],
+      },
+      { heading: 'Key Formulas', formulaKey: 'transformer' },
+      {
+        heading: 'Positional Encoding',
+        body: `Since self-attention is permutation-invariant (it doesn't know the order of tokens), position information must be injected explicitly. The original Transformer adds sinusoidal positional encodings to the input embeddings: PE(pos, 2i) = sin(pos/10000^(2i/d)), PE(pos, 2i+1) = cos(pos/10000^(2i/d)). Modern models often use learned positional embeddings or Rotary Position Embeddings (RoPE) instead.`,
+      },
+      {
+        heading: 'Pros & Cons',
+        pros: [
+          'Fully parallelizable — trains orders of magnitude faster than RNNs on GPUs.',
+          'Captures long-range dependencies in O(1) layers (vs. O(n) for RNNs).',
+          'Scales exceptionally well — more data + bigger model = better performance.',
+          'Foundation of all modern LLMs (GPT, Claude, Gemini, LLaMA, BERT).',
+        ],
+        cons: [
+          'Self-attention is O(n²) in sequence length — expensive for very long contexts.',
+          'Requires large amounts of data to train from scratch.',
+          'Positional encoding must be added explicitly (no built-in order awareness).',
+          'Computationally expensive and energy-intensive at scale.',
+        ],
+      },
+      {
+        heading: 'Real-World Applications',
+        bullets: [
+          'Large Language Models — GPT-4, Claude, Gemini, LLaMA.',
+          'Image recognition — Vision Transformer (ViT) treats image patches as tokens.',
+          'Protein structure prediction — AlphaFold 2 uses Transformer-based attention.',
+          'Code generation, translation, summarization, and question answering.',
         ],
       },
     ],

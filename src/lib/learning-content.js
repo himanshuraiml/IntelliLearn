@@ -65,6 +65,13 @@ export const LEARNING_GUIDES = {
     { title: "Why 'Deep'?", content: "A Deep Neural Network uses 3+ hidden layers. More depth allows the model to learn increasingly abstract representations of data." },
     { title: "Hierarchical Features", content: "Early layers detect simple patterns. Deeper layers combine those to recognize complex structures — like edges → shapes → objects in images." },
     { title: "Spiral Classification", content: "Try the Spiral dataset — it's nearly impossible for a shallow model. A DNN easily classifies it by learning non-linear embeddings." }
+  ],
+  backprop: [
+    { title: "Forward Pass First", content: "Each epoch begins with a forward pass: data flows x → z → a → ŷ. The network produces a prediction before any learning happens." },
+    { title: "Computing the Loss", content: "Binary cross-entropy compares ŷ to the true label y. Large loss = far from truth. This scalar is the 'score' backprop will try to minimize." },
+    { title: "Backward Pass — Chain Rule", content: "Starting from the loss, gradients flow backward via the chain rule: ∂L/∂w = ∂L/∂a · ∂a/∂z · ∂z/∂w. Each layer multiplies by its local derivative." },
+    { title: "Gradient Flow Panel", content: "Watch the ‖∂L/∂W‖ bars on the right. Healthy training = similar bar heights. Bars shrinking for early layers = vanishing gradients." },
+    { title: "Vanilla SGD", content: "This model uses plain Stochastic Gradient Descent: w ← w − α·∂L/∂w. Every weight is nudged in the direction that reduces loss each epoch." }
   ]
 };
 

@@ -19,8 +19,11 @@ import TrainingChart       from '@/components/TrainingChart';
 import ConfusionMatrix     from '@/components/ConfusionMatrix';
 import FeatureImportance   from '@/components/FeatureImportance';
 import AlgoExplainer       from '@/components/AlgoExplainer';
+import BackpropExplainer   from '@/components/BackpropExplainer';
 import ROCCurve            from '@/components/ROCCurve';
 import MathFormula         from '@/components/MathFormula';
+import SequencePlot        from '@/components/SequencePlot';
+import ArchitectureViz     from '@/components/ArchitectureViz';
 import {
   trainLinearRegression, trainPolynomialRegression,
   trainLogisticRegression, trainRidgeRegression,
@@ -28,6 +31,7 @@ import {
   predictKNN, buildKNNSurface,
   trainKMeans, trainNaiveBayes, trainDecisionTree, trainRandomForest,
   trainPCA,
+  trainCNN, trainRNN, trainLSTM, trainTransformer,
   exportModel,
 } from '@/lib/ml-engine';
 import {
@@ -37,6 +41,7 @@ import {
   generateMoonData, generateIrisData,
   generateClusteringData, generateClusteringData5,
   generatePCAData,
+  generateTrendData, generateWaveformData, generateStepData,
 } from '@/lib/datasets';
 import { saveProgress } from '@/lib/persistence';
 
@@ -59,20 +64,29 @@ const ALGORITHMS = {
     { id: 'kmeans',       label: 'K-Means Clustering',     icon: <Activity size={15} />,   desc: 'Partition unlabeled data into K groups by centroid proximity.' },
   ],
   "Deep Learning": [
-    { id: 'nn',           label: 'Neural Network (MLP)',   icon: <Box size={15} />,        desc: 'Multi-layer perceptron that learns non-linear decision boundaries.' },
-    { id: 'dnn',          label: 'Deep Neural Net',        icon: <Cpu size={15} />,        desc: 'Deep MLP with more hidden layers for complex patterns.' },
+    { id: 'nn',          label: 'Neural Network (MLP)',   icon: <Box size={15} />,        desc: 'Multi-layer perceptron that learns non-linear decision boundaries.' },
+    { id: 'dnn',         label: 'Deep Neural Net',        icon: <Cpu size={15} />,        desc: 'Deep MLP with more hidden layers for complex patterns.' },
+    { id: 'backprop',    label: 'Backpropagation',        icon: <GitBranch size={15} />,  desc: 'Step-by-step interactive explainer: watch gradients flow backward through a neural network.', modal: true },
+    { id: 'cnn',         label: 'CNN (1-D Conv)',         icon: <Layers size={15} />,     desc: 'Convolutional filters slide over the feature sequence to extract local patterns.' },
+    { id: 'rnn',         label: 'RNN',                   icon: <Activity size={15} />,   desc: 'Recurrent network that processes features as a time-step sequence with a hidden state.' },
+    { id: 'lstm',        label: 'LSTM',                  icon: <GitBranch size={15} />,  desc: 'Long Short-Term Memory cells add gating to prevent vanishing gradients in RNNs.' },
+    { id: 'transformer', label: 'Transformer',           icon: <Zap size={15} />,        desc: 'Scaled dot-product self-attention lets every token attend to every other token.' },
   ],
   "Dim. Reduction": [
     { id: 'pca',          label: 'PCA',                    icon: <TrendingUp size={15} />, desc: 'Find the directions of maximum variance (principal components).' },
   ],
 };
 
-const ALL_ALGOS        = Object.values(ALGORITHMS).flat();
-const REGRESSION_ALGOS = new Set(['linear', 'poly', 'ridge']);
-const CLUSTERING_ALGOS = new Set(['kmeans']);
-const DIM_RED_ALGOS    = new Set(['pca']);
-const CLASSIFIER_ALGOS = new Set(['logistic','knn','naiveBayes','svm','decisionTree','randomForest','nn','dnn']);
-const NEEDS_EPOCH      = new Set(['linear', 'poly', 'ridge', 'logistic', 'svm', 'nn', 'dnn']);
+const ALL_ALGOS          = Object.values(ALGORITHMS).flat().filter(a => !a.modal);
+const REGRESSION_ALGOS   = new Set(['linear', 'poly', 'ridge']);
+const CLUSTERING_ALGOS   = new Set(['kmeans']);
+const DIM_RED_ALGOS      = new Set(['pca']);
+// SEQ_ALGOS: use sequence datasets and sequence visualizations
+const SEQ_ALGOS          = new Set(['cnn', 'rnn', 'lstm', 'transformer']);
+const MLP_ALGOS          = new Set(['nn', 'dnn']);
+const DEEP_LEARNING_ALGOS = new Set(['nn', 'dnn', 'cnn', 'rnn', 'lstm', 'transformer']);
+const CLASSIFIER_ALGOS   = new Set(['logistic','knn','naiveBayes','svm','decisionTree','randomForest','nn','dnn']);
+const NEEDS_EPOCH        = new Set(['linear', 'poly', 'ridge', 'logistic', 'svm', 'nn', 'dnn', 'cnn', 'rnn', 'lstm', 'transformer']);
 
 // ─── Hyperparameter hints & warnings ──────────────────────────────────────
 const PARAM_HINTS = {
@@ -101,6 +115,10 @@ const DATASETS = {
   clustering:     [{ id: 'cluster3',   label: '3 Clusters' },        { id: 'cluster5',   label: '5 Clusters' }],
   deeplearning:   [{ id: 'spiral',     label: 'Spiral' },            { id: 'moon',       label: 'Moon Shapes' },
                    { id: 'blobs',      label: '2-Class Blobs' }],
+  // Proper sequence datasets for CNN / RNN / LSTM / Transformer
+  seqlearning:    [{ id: 'trend',      label: 'Trend (↑ vs ↓)' },
+                   { id: 'waveform',   label: 'Sine vs Noise' },
+                   { id: 'step',       label: 'Step Position' }],
   dimred:         [{ id: 'pcadata',    label: 'Ellipse Cloud' }],
 };
 
@@ -108,13 +126,24 @@ function getDatasetCategory(tab) {
   if (REGRESSION_ALGOS.has(tab)) return 'regression';
   if (CLUSTERING_ALGOS.has(tab)) return 'clustering';
   if (DIM_RED_ALGOS.has(tab))    return 'dimred';
-  if (tab === 'nn' || tab === 'dnn') return 'deeplearning';
+  if (SEQ_ALGOS.has(tab))        return 'seqlearning';
+  if (MLP_ALGOS.has(tab))        return 'deeplearning';
   return 'classification';
 }
 
 function generateData(datasetId, tab, nPoints, noiseLevel) {
-  const n = nPoints  || 70;
+  const n  = nPoints     || 70;
   const nl = noiseLevel != null ? noiseLevel : 1;
+  // Sequence datasets (CNN / RNN / LSTM / Transformer)
+  if (SEQ_ALGOS.has(tab)) {
+    const seqN = Math.max(20, Math.min(n, 100)); // clamp to sensible range
+    switch (datasetId) {
+      case 'trend':    return generateTrendData(seqN, nl);
+      case 'waveform': return generateWaveformData(seqN, nl);
+      case 'step':     return generateStepData(seqN, nl);
+      default:         return generateTrendData(seqN, nl);
+    }
+  }
   switch (datasetId) {
     case 'synth':       return generateLinearData(n, nl);
     case 'poly':        return generatePolynomialData(n, nl);
@@ -150,6 +179,10 @@ async function trainAlgo(tab, data, params) {
     const hiddenLayers = tab === 'dnn' ? [8, 8, 4] : [4, 4];
     return trainFFNN(data, params, { hiddenLayers, activation: 'relu' }, async () => {});
   }
+  if (SEQ_ALGOS.has(tab)) {
+    const fn = { cnn: trainCNN, rnn: trainRNN, lstm: trainLSTM, transformer: trainTransformer }[tab];
+    return fn(data, params, async () => {});
+  }
   return null;
 }
 
@@ -170,6 +203,7 @@ export default function Home() {
   const [liveMetrics,    setLiveMetrics]    = useState({ loss: null, acc: null });
   const [showAlgoMenu,   setShowAlgoMenu]   = useState(false);
   const [showExplainer,  setShowExplainer]  = useState(false);
+  const [showBackprop,   setShowBackprop]   = useState(false);
 
   // Training history
   const [trainingHistory, setTrainingHistory] = useState({ loss: [], acc: [], valLoss: [], valAcc: [] });
@@ -231,14 +265,14 @@ export default function Home() {
     const handler = (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
       if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!isTraining) handleTrain(); }
-      else if (e.key === 'ArrowLeft')  { e.preventDefault(); guideRef.current?.prev(); }
-      else if (e.key === 'ArrowRight') { e.preventDefault(); guideRef.current?.next(); }
+      else if (e.key === 'ArrowLeft')  { if (!showBackprop) { e.preventDefault(); guideRef.current?.prev(); } }
+      else if (e.key === 'ArrowRight') { if (!showBackprop) { e.preventDefault(); guideRef.current?.next(); } }
       else if (e.key === 'r' || e.key === 'R') { if (!isTraining) handleReset(); }
       else if (e.key === 'd' || e.key === 'D') { setDrawMode(v => !v); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [isTraining]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isTraining, showBackprop]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const el = vizContainerRef.current;
@@ -382,6 +416,14 @@ export default function Home() {
           setNnWeights(r.weights); setFullModel(r.model); saveProgress('nn', 100);
         }
 
+      } else if (SEQ_ALGOS.has(activeTab)) {
+        const trainFn = { cnn: trainCNN, rnn: trainRNN, lstm: trainLSTM, transformer: trainTransformer }[activeTab];
+        const r = await trainFn(data, params, epochCB);
+        if (!stopRef.current) {
+          setModelResult(r); setFullModel(r.model);
+          if (r.accuracy != null) setLiveMetrics(prev => ({ ...prev, acc: (r.accuracy * 100).toFixed(1) + '%' }));
+        }
+
       } else if (activeTab === 'knn') {
         setProgress(50);
         const surface    = buildKNNSurface(data, params.k || 3, 35);
@@ -454,6 +496,8 @@ export default function Home() {
   // ── Click-to-predict ──────────────────────────────────────────────────────
   const predictPoint = useMemo(() => {
     if (!modelResult) return null;
+    // Sequence models don't support 2D point prediction
+    if (SEQ_ALGOS.has(activeTab)) return null;
     if (REGRESSION_ALGOS.has(activeTab)) {
       if (modelResult.weight !== undefined) {
         const { weight, bias } = modelResult;
@@ -520,6 +564,7 @@ export default function Home() {
   // ── Boundary heatmap overlay for logistic/SVM (computed from weights) ────
   const scatterRegressionLine = useMemo(() => {
     if (!modelResult || !showBoundary) return modelResult;
+    if (SEQ_ALGOS.has(activeTab)) return null; // no 2D surface for seq models
     if (!CLASSIFIER_ALGOS.has(activeTab)) return modelResult;
     // KNN, NB, DTree, RF, NN already have cells — just pass through
     if (modelResult.cells) return modelResult;
@@ -544,6 +589,16 @@ export default function Home() {
 
   // ── Confusion matrix ──────────────────────────────────────────────────────
   const confusionMatrix = useMemo(() => {
+    // Sequence models: build from predictions array returned by the model
+    if (SEQ_ALGOS.has(activeTab)) {
+      if (!modelResult?.predictions || !data.length) return null;
+      const matrix = [[0,0],[0,0]];
+      data.forEach((d, i) => {
+        const p = modelResult.predictions[i];
+        if (p !== undefined) matrix[d.label][p.label]++;
+      });
+      return { matrix, labels: ['0','1'] };
+    }
     if (!predictPoint) return null;
     if (!CLASSIFIER_ALGOS.has(activeTab)) return null;
     if (!data.length) return null;
@@ -559,7 +614,7 @@ export default function Home() {
       if (actual !== undefined && pred !== undefined) matrix[actual][pred]++;
     });
     return { matrix, labels: classIds.map(String) };
-  }, [predictPoint, data, activeTab]);
+  }, [predictPoint, modelResult, data, activeTab]);
 
   // ── Raw probability function for ROC (logistic / NN / NaiveBayes only) ───
   const rawProbFn = useMemo(() => {
@@ -722,7 +777,7 @@ export default function Home() {
           </button>
 
           {/* Draw mode toggle */}
-          {!REGRESSION_ALGOS.has(activeTab) && !DIM_RED_ALGOS.has(activeTab) && (
+          {!REGRESSION_ALGOS.has(activeTab) && !DIM_RED_ALGOS.has(activeTab) && !SEQ_ALGOS.has(activeTab) && (
             <div className="space-y-1.5">
               <button onClick={() => setDrawMode(v => !v)} title="Toggle draw mode (D)" aria-pressed={drawMode}
                 className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
@@ -745,7 +800,7 @@ export default function Home() {
           )}
 
           {/* Boundary toggle */}
-          {CLASSIFIER_ALGOS.has(activeTab) && (
+          {CLASSIFIER_ALGOS.has(activeTab) && !SEQ_ALGOS.has(activeTab) && (
             <button onClick={() => setShowBoundary(v => !v)} aria-pressed={showBoundary}
               className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
                 showBoundary ? 'bg-purple-500/10 border-purple-500/30 text-purple-400' : 'bg-slate-800 border-white/10 text-slate-500 hover:text-slate-300'}`}>
@@ -820,11 +875,18 @@ export default function Home() {
               </div>
             </button>
             {showAlgoMenu && (
-              <div className="absolute top-full left-0 mt-2 w-72 bg-slate-900 border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl">
+              <div className="absolute top-full left-0 mt-2 w-72 bg-slate-900 border border-white/10 rounded-2xl shadow-2xl z-50 backdrop-blur-xl overflow-y-auto max-h-[70vh]">
                 {Object.entries(ALGORITHMS).map(([cat, items]) => (
                   <div key={cat} className="border-b border-white/5 last:border-0 p-2">
                     <div className="px-3 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest">{cat}</div>
-                    {items.map(algo => (
+                    {items.map(algo => algo.modal ? (
+                      // Modal entries (e.g. Backpropagation) open an explainer instead of training
+                      <button key={algo.id} onClick={() => { setShowBackprop(true); setShowAlgoMenu(false); }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all text-sm text-purple-400 hover:bg-purple-500/10 hover:text-purple-300">
+                        {algo.icon}<span className="font-medium">{algo.label}</span>
+                        <span className="ml-auto text-[9px] text-purple-500 border border-purple-500/30 rounded px-1">explainer</span>
+                      </button>
+                    ) : (
                       <button key={algo.id} onClick={() => { setActiveTab(algo.id); setShowAlgoMenu(false); }}
                         className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all text-sm ${activeTab === algo.id ? 'bg-brand-500/10 text-brand-400' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}>
                         {algo.icon}<span className="font-medium">{algo.label}</span>
@@ -837,10 +899,17 @@ export default function Home() {
           </div>
 
           {/* Explain button */}
-          <button onClick={() => setShowExplainer(true)}
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-slate-400 hover:border-brand-500/50 hover:text-brand-400 transition-all text-xs font-semibold shrink-0">
-            <BookOpen size={13} /><span className="hidden sm:inline">Explain</span>
-          </button>
+          {activeTab === 'cnn' ? (
+            <a href="https://poloclub.github.io/cnn-explainer/" target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-slate-400 hover:border-brand-500/50 hover:text-brand-400 transition-all text-xs font-semibold shrink-0">
+              <BookOpen size={13} /><span className="hidden sm:inline">Explain ↗</span>
+            </a>
+          ) : (
+            <button onClick={() => setShowExplainer(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-slate-400 hover:border-brand-500/50 hover:text-brand-400 transition-all text-xs font-semibold shrink-0">
+              <BookOpen size={13} /><span className="hidden sm:inline">Explain</span>
+            </button>
+          )}
 
           {/* Compare picker */}
           {comparisonMode && comparableAlgos.length > 0 && (
@@ -923,7 +992,16 @@ export default function Home() {
                         height={Math.max(200, vizDims.h - 22)} />
                     </div>
                   </div>
-                ) : activeTab === 'nn' || activeTab === 'dnn' ? (
+                ) : SEQ_ALGOS.has(activeTab) ? (
+                  <div className="grid grid-cols-2 gap-2 h-full">
+                    <ArchitectureViz algo={activeTab} />
+                    <SequencePlot
+                      data={data}
+                      predictions={modelResult?.predictions ?? null}
+                      isTraining={isTraining}
+                    />
+                  </div>
+                ) : (activeTab === 'nn' || activeTab === 'dnn') ? (
                   <div className="grid grid-cols-2 gap-2 h-full">
                     <NeuralNetworkGraph weights={nnWeights}
                       layers={activeTab === 'dnn' ? [2, 8, 8, 4, 1] : [2, 4, 4, 1]}
@@ -1008,6 +1086,7 @@ export default function Home() {
               <FeatureImportance importance={modelResult.featureImportance} modelType={activeTab} />
             )}
 
+
             {/* Decision Tree Visualizer */}
             {activeTab === 'decisionTree' && modelResult?.tree && (
               <DecisionTreeViz tree={modelResult.tree} width={360} height={260} />
@@ -1064,6 +1143,7 @@ export default function Home() {
       </section>
 
       {showExplainer && <AlgoExplainer algoId={activeTab} onClose={() => setShowExplainer(false)} />}
+      {showBackprop  && <BackpropExplainer onClose={() => setShowBackprop(false)} />}
     </main>
   );
 }

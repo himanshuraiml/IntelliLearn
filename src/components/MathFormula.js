@@ -114,6 +114,13 @@ function getFormulaData(algo, params, modelResult) {
       };
     }
 
+    case 'backprop': return {
+      label: 'Backprop — Chain Rule',
+      main:  '∂L/∂w = δ · σ\'(z) · x   |   w ← w − α·∂L/∂w',
+      sub:   `Arch: 2→8→4→1 (SGD, ReLU)   |   LR = ${params.learningRate}`,
+      color: '#f472b6',
+    };
+
     case 'pca': return {
       label: 'Principal Components',
       main:  m?.explainedVar1 != null
